@@ -338,8 +338,8 @@ async function sendClassDescription(className, instance) {
     await sendClassDescription(descr.extends, proto);
   }
 
-  for (let propName of Object.keys(proto)) {
-    if (propName.startsWith("_")) {
+  for (let propName of Object.getOwnPropertyNames(proto)) {
+    if (propName.startsWith("_") || propName == "constructor") {
       continue;
     }
     if (typeof(proto[propName]) == "function") {
