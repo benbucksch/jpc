@@ -9,7 +9,7 @@ import { assert } from "./util.js";
 export function start(jpcProtocol, startObject) {
   callRemote = (...args) => jpcProtocol.callRemote(...args);
   jpcProtocol.registerIncomingCall("class", registerRemoteClass);
-  jpcProtocol.registerIncomingCall("start", () => startObject);
+  jpcProtocol.registerIncomingCall("start", async () => await mapOutgoingObjects(startObject));
   jpcProtocol.registerIncomingCall("new", newObjListener);
   jpcProtocol.registerIncomingCall("func", funcListener);
   jpcProtocol.registerIncomingCall("get", getterListener);
@@ -23,7 +23,11 @@ export function start(jpcProtocol, startObject) {
         idRemote: id,
       }).catch(console.error);
     });
+    // TODO Free everything when client disconnects
+    // See <https://github.com/tc39/proposal-weakrefs/blob/master/reference.md#notes-on-cleanup-callbacks>
+    // and <https://github.com/tc39/proposal-weakrefs/issues/125>
   } else { // not supported, use dummy
+    console.warn("FinalizationRegistry is not supported. This will leak everything. Please update node.js.");
     gRemoteObjectRegistry = {
       register: () => {},
     };
@@ -53,15 +57,22 @@ class RemoteClass {
  * @param classDescrJSON {JSON} Describes the remote class, see PROTOCOL.md
  */
 function registerRemoteClass(classDescrJSON) {
-  let existing = this._classes.get(classDescrJSON.className);
+  if (Array.isArray(classDescrJSON)) {
+    for (let descr of classDescrJSON) {
+      registerRemoteClass(descr);
+    }
+    return;
+  }
+
+  let existing = gRemoteClasses.get(classDescrJSON.className);
   if (existing) {
     return existing;
   }
 
   let parent;
   if (classDescrJSON.extends) {
-    parent = this._classes.get(classDescrJSON.extends);
-    assert(parent, `Super class ${ objDescrJSON.extends } is unknown here. Make sure to first push the super class description before the subclass description.`);
+    parent = gRemoteClasses.get(classDescrJSON.extends);
+    assert(parent, `Super class ${ classDescrJSON.extends } is unknown here. Make sure to first push the super class description before the subclass description.`);
   }
 
   let proto;
@@ -84,14 +95,7 @@ function registerRemoteClass(classDescrJSON) {
     proto[setterName] = makeSetter(getter.name);
   }
   proto.newRemote = makeNewObj(classDescrJSON.className); // TODO static function
-  this._classes.set(classDescrJSON.className, proto);
-}
-
-// not actually used
-class StubObject {
-  constructor() {
-    this.id = addRemoteObject(this);
-  }
+  gRemoteClasses.set(classDescrJSON.className, proto);
 }
 
 /**
@@ -104,9 +108,10 @@ function makeStub(objDescrJSON) {
   let proto = gRemoteClasses.get(objDescrJSON.className);
   assert(proto, `Remote class ${ objDescrJSON.className } is unknown here. Make sure to first push the class description.`);
   let stub = Object.create(proto);
-  stub.id = addRemoteObject(stub);
+  stub.id = objDescrJSON.id;
+  addRemoteObject(objDescrJSON.id, stub);
   for (let propName in objDescrJSON.properties) {
-    stub[propName] = objDescrJSON.properties[propName];
+    stub[propName] = mapIncomingObjects(objDescrJSON.properties[propName]);
   }
   return stub;
 }
@@ -151,7 +156,7 @@ function makeNewObj(className) {
  * @return {any} same as value, just Object descriptions and Object references
  *   replaced with `StubObject`s.
  */
-function mapIncomingObjects(value) {
+export function mapIncomingObjects(value) {
   if (typeof(value) == "string" ||
       typeof(value) == "number" ||
       typeof(value) == "boolean") {
@@ -159,12 +164,13 @@ function mapIncomingObjects(value) {
   } else if (Array.isArray(value)) {
     return value.map(el => mapIncomingObjects(el));
   } else if (typeof(value) == "object") {
-    if (value.id && value.className) { // object description
-      return makeStub(value);
-    } else if (value.idRemote) {
-      return getLocalObject(value.idRemote);
-    } else if (value.idLocal) {
-      return getRemoteObject(value.idLocal);
+    let obj = value;
+    if (obj.id && obj.className) { // object description
+      return makeStub(obj);
+    } else if (obj.idRemote) {
+      return getLocalObject(obj.idRemote);
+    } else if (obj.idLocal) {
+      return getRemoteObject(obj.idLocal);
     }
   }
 }
@@ -200,7 +206,7 @@ async function funcListener(payload) {
   // may throw
   let result = obj[name](...args);
 
-  return mapOutgoingObjects(result);
+  return await mapOutgoingObjects(result);
 }
 
 async function getterListener(payload) {
@@ -212,7 +218,7 @@ async function getterListener(payload) {
   // may throw
   let value = obj[name];
 
-  return mapOutgoingObjects(value);
+  return await mapOutgoingObjects(value);
 }
 
 async function setterListener(payload) {
@@ -233,59 +239,129 @@ async function setterListener(payload) {
  * @return {any} same as value, just local objects replaced with
  *   Object descriptions and Object references, as defined by PROTOCOL.md
  */
-function mapOutgoingObjects(value) {
+async function mapOutgoingObjects(value) {
   if (typeof(value) == "string" ||
       typeof(value) == "number" ||
       typeof(value) == "boolean") {
     return value;
   } else if (Array.isArray(value)) {
-    return value.map(el => mapOutgoingObjects(el));
+    return Promise.all(value.map(async el => await mapOutgoingObjects(el)));
   } else if (typeof(value) == "object") {
-    console.log("Sending object", value);
-    if (value instanceof RemoteClass) { // TODO check working?
+    let obj = value;
+    if (obj instanceof RemoteClass) { // TODO check working?
       return { // Object reference for remote object
-        idRemote: value.id,
+        idRemote: obj.id,
       };
     }
 
-    if (value.constructor.name == "Object") { // JSON object -- TODO better way to check?
+    if (obj.constructor.name == "Object") { // JSON object -- TODO better way to check?
       let json = {};
-      for (let propName of value.keys()) {
-        json[propName] = mapOutgoingObjects(value[propName]);
+      for (let propName of obj.keys()) {
+        json[propName] = await mapOutgoingObjects(obj[propName]);
       }
       return json;
     }
 
-    let id = getExistingIDForLocalObject(value);
+    let id = getExistingIDForLocalObject(obj);
     if (id) {
       return { // Object reference for local object
         idLocal: id,
       };
     }
 
-    return createObjectDescription(value, getNewIDForLocalObject(obj));
+    return await createObjectDescription(obj, getNewIDForLocalObject(obj));
   }
 }
 
+
 /**
+ * Whether the local class description was already sent to the remote end.
+ * { Map className {string} -> sent {boolean} }
+ */
+var gLocalClasses = new Map();
+
+/**
+ * Return an object instance to the remote party that they did not see yet.
+ *
+ * Sends the class description as needed.
+ *
  * @param obj {Object} local object
  * @returns {JSON} Object description, see PROTOCOL.md
  */
-function createObjectDescription(obj, id) {
-  let props = null;
-  for (let propName in obj) {
-    if (propName.startsWith("_")) {
-      continue;
-    }
-    props[propName] = obj[propName];
-  }
+async function createObjectDescription(obj, id) {
   let className = obj.constructor.name;
   assert(className, "Could not find class name for local object");
+  if ( !gLocalClasses.get(className)) {
+    await sendClassDescription(className, obj);
+  }
+
+  let props = null;
+  for (let propName in obj) {
+    if (propName.startsWith("_") ||
+        typeof(obj[propName]) == "function") {
+      continue;
+    }
+    if ( !props) {
+      props = {};
+    }
+    props[propName] = await mapOutgoingObjects(obj[propName]);
+  }
+
   return {
     id: id,
     className: className,
     properties: props,
   };
+}
+
+async function sendClassDescription(className, instance) {
+  if (gLocalClasses.get(className)) {
+    return;
+  }
+  gLocalClasses.set(className, true);
+
+  let proto;
+  if (instance) {
+    proto = Object.getPrototypeOf(instance);
+  }
+
+  let descr = {
+    className: className,
+    functions: [],
+    getters: [],
+    properties: [],
+  };
+
+  let parentClass = Object.getPrototypeOf(proto);
+  if (parentClass && parentClass.constructor.name != "Object") {
+    descr.extends = parentClass.constructor.name;
+    await sendClassDescription(descr.extends, proto);
+  }
+
+  for (let propName of Object.keys(proto)) {
+    if (propName.startsWith("_")) {
+      continue;
+    }
+    if (typeof(proto[propName]) == "function") {
+      descr.functions.push({
+        name: propName,
+      });
+      continue;
+    }
+    let property = Object.getOwnPropertyDescriptor(proto, propName);
+    if (typeof(property.get) == "function") {
+      descr.getters.push({
+        name: propName,
+        hasSetter: typeof(property.set) == "function",
+      });
+      continue;
+    }
+    descr.properties.push({
+      name: propName,
+    });
+  }
+
+  await callRemote("class", "class-r", [ descr ]);
 }
 
 
@@ -342,6 +418,7 @@ function getExistingIDForLocalObject(obj) {
  * @returns {string} ID
  */
 function getNewIDForLocalObject(obj) {
+  let id;
   do {
     id = generateObjID();
   } while (gLocalIDsToObjects.has(id))

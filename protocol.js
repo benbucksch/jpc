@@ -1,4 +1,4 @@
-import { start } from "./obj.js";
+import { start, mapIncomingObjects } from "./obj.js";
 
 /**
  * Wire protocol API
@@ -18,6 +18,10 @@ export default class JPCProtocol {
    */
   async init() {
     start(this, this._startObject);
+  }
+
+  async getRemoteStartObject() {
+    return mapIncomingObjects(await this.callRemote("start"));
   }
 
   /**
