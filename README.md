@@ -21,12 +21,12 @@ This is what your client calls initially and gets the first object references fr
 
 The remote API is the same as the local API, just with an `await` prepended to all calls. Unless you're constructing new remote objects or using setters.
 
-|          | Local object        | Remote object             | Difference                                                                     |
-|----------|---------------------|---------------------------|--------------------------------------------------------------------------------|
-| function | `car.startEngine()` | `await car.startEngine()` | same, just with `await`                                                        |
-| getter   | `car.owner`         | `await car.owner`         | same, just with `await`                                                        |
-| setter   | `car.owner = val`   | `await car.setOwner(val)` | because setters always return the assigned value and cannot return a `Promise` |
-| new      | `new Car()`         | `await Car.newRemove()`   | because `new` always returns the object and cannot return a `Promise`          |
+|          | Local object        | Remote object             | Difference                                       |
+|----------|---------------------|---------------------------|--------------------------------------------------|
+| function | `car.startEngine()` | `await car.startEngine()` | same, just with `await`                          |
+| getter   | `car.owner`         | `await car.owner`         | same, just with `await`                          |
+| setter   | `car.owner = val`   | `await car.setOwner(val)` | because setters always return the assigned value |
+| new      | `new Car()`         | `await Car.newRemove()`   | because `new` always returns the object          |
 
 #### Example
 
