@@ -88,10 +88,9 @@ function registerRemoteClass(classDescrJSON) {
   for (let getter of classDescrJSON.getters) {
     Object.defineProperty(proto, getter, {
       enumerable: true,
-      writable: false,
       get: makeGetter(getter.name),
     });
-    let setterName = "set" + getterName[0].toUpperCase() + getter.name.substr(1);
+    let setterName = "set" + getter.name[0].toUpperCase() + getter.name.substr(1);
     proto[setterName] = makeSetter(getter.name);
   }
   proto.newRemote = makeNewObj(classDescrJSON.className); // TODO static function
@@ -117,36 +116,46 @@ function makeStub(objDescrJSON) {
 }
 
 function makeFunction(functionName) {
-  // this == stub object
-  return (...args) => callRemote("func", "func-r", {
-    obj: this.id,
-    name: functionName,
-    args: args,
-  });
+  return function(...args) {
+    // this == stub object
+    callRemote("func", "func-r", {
+      obj: this.id,
+      name: functionName,
+      args: args,
+    });
+  }
 }
 
 function makeGetter(propName) {
   // this == stub object
-  return () => callRemote("get", "set-r", {
-    obj: this.id,
-    name: propName,
-  });
+  return function() {
+    // this == stub object
+    callRemote("get", "set-r", {
+      obj: this.id,
+      name: propName,
+    });
+  }
 }
 
 function makeSetter(propName) {
-  // this == stub object
-  return val => callRemote("set", "set-r", {
-    obj: this.id,
-    name: propName,
-    value: val,
-  });
+  return function(val) {
+    // this == stub object
+    callRemote("set", "set-r", {
+      obj: this.id,
+      name: propName,
+      value: val,
+    });
+  }
 }
 
 function makeNewObj(className) {
-  return (...args) => callRemote("new", "new-r", {
-    className: className,
-    args: args,
-  });
+  return function(...args) {
+    // this == stub object
+    callRemote("new", "new-r", {
+      className: className,
+      args: args,
+    });
+  }
 }
 
 /**
