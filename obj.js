@@ -1,21 +1,36 @@
-import { assert } from "jpc/util";
+import { assert } from "./util.js";
 
-function start(callRemote, registerIncomingCall) {
-  registerIncomingCall("class", registerRemoteClass);
-  registerIncomingCall("new", newObjListener);
-  registerIncomingCall("func", funcListener);
-  registerIncomingCall("get", getterListener);
-  registerIncomingCall("set", setterListener);
-  registerIncomingCall("del", payload => {
+/**
+ * Called by the wire protocol implementation,
+ * before calling any of the other functions.
+ *
+ * @param jpcProtocol {JPCProtocol} Wire protocol implementation
+ */
+export function start(jpcProtocol, startObject) {
+  callRemote = (...args) => jpcProtocol.callRemote(...args);
+  jpcProtocol.registerIncomingCall("class", registerRemoteClass);
+  jpcProtocol.registerIncomingCall("start", () => startObject);
+  jpcProtocol.registerIncomingCall("new", newObjListener);
+  jpcProtocol.registerIncomingCall("func", funcListener);
+  jpcProtocol.registerIncomingCall("get", getterListener);
+  jpcProtocol.registerIncomingCall("set", setterListener);
+  jpcProtocol.registerIncomingCall("del", payload => {
     deleteLocalObject(payload.idRemote);
   });
-  gRemoteObjectRegistry = new FinalizationRegistry(id => {
-    callRemote("del", null, {
-      idRemote: id,
-    }).catch(console.error);
-  });
+  if ("FinalizationRegistry" in global) {
+    gRemoteObjectRegistry = new FinalizationRegistry(id => {
+      jpcProtocol.callRemote("del", null, {
+        idRemote: id,
+      }).catch(console.error);
+    });
+  } else { // not supported, use dummy
+    gRemoteObjectRegistry = {
+      register: () => {},
+    };
+  }
 }
 
+var callRemote;
 
 ///////////////////////////////////////////
 // Stub object
@@ -159,7 +174,7 @@ function mapIncomingObjects(value) {
 // Local object
 // Passing a normal local JS object to the remote side
 
-async function newObjListener(callID, payload) {
+async function newObjListener(payload) {
   assert(typeof(payload.className) == "string", "Need class name");
   let classCtor = global[payload.className];
   let obj;
@@ -171,14 +186,11 @@ async function newObjListener(callID, payload) {
     args = mapIncomingObjects(args);
     obj = classCtor(...args);
   }
-  let id = getIDForLocalObject(obj);
-  await callRemote("new-r", {
-    obj: createObjectDescription(obj, getNewIDForLocalObject(obj)),
-    call: callID,
-  });
+
+  return createObjectDescription(obj, getNewIDForLocalObject(obj));
 }
 
-async function funcListener(callID, payload) {
+async function funcListener(payload) {
   let name = payload.name;
   assert(typeof(name) == "string", "Need function name");
   assert(typeof(payload.obj) == "string", "Need object ID");
@@ -188,13 +200,10 @@ async function funcListener(callID, payload) {
   // may throw
   let result = obj[name](...args);
 
-  await callRemote("func-r", {
-    result: mapOutgoingObjects(result),
-    call: callID,
-  });
+  return mapOutgoingObjects(result);
 }
 
-async function getterListener(callID, payload) {
+async function getterListener(payload) {
   let name = payload.name;
   assert(typeof(name) == "string", "Need property getter name");
   assert(typeof(payload.obj) == "string", "Need object ID");
@@ -203,13 +212,10 @@ async function getterListener(callID, payload) {
   // may throw
   let value = obj[name];
 
-  await callRemote("get-r", {
-    value: mapOutgoingObjects(value),
-    call: callID,
-  });
+  return mapOutgoingObjects(value);
 }
 
-async function setterListener(callID, payload) {
+async function setterListener(payload) {
   let name = payload.name;
   assert(typeof(name) == "string", "Need property setter name");
   assert(typeof(payload.obj) == "string", "Need object ID");
@@ -218,10 +224,6 @@ async function setterListener(callID, payload) {
 
   // may throw
   obj[payload.name] = value;
-
-  await callRemote("set-r", {
-    call: callID,
-  });
 }
 
 /**
@@ -353,8 +355,8 @@ function getNewIDForLocalObject(obj) {
  * @param obj {StubObj} Remote object
  */
 function addRemoteObject(id, obj) {
-  let obj = gRemoteObjects.get(id);
-  assert( !obj, `Remote object ID ${ id } already exists.`);
+  let existing = gRemoteObjects.get(id);
+  assert( !existing, `Remote object ID ${ id } already exists.`);
   gRemoteObjects.set(id, obj);
   gRemoteObjectRegistry.register(obj, id);
 }

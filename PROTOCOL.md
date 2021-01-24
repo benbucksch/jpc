@@ -109,8 +109,7 @@ payload =
   namedArgs: {
     driver: "Wilma"
   },
-  obj: "2345",
-  call: "1234"
+  obj: "2345"
 }
 ```
 
@@ -120,8 +119,7 @@ Notes:
 Response:
 
 method = `func-r`
-payload.result = value (see above)
-payload.call = the passed-in call ID
+payload = value (see above)
 
 ## Getters
 
@@ -132,16 +130,14 @@ payload =
 ```
 {
   name: "owner",
-  obj: "2345",
-  call: "1234"
+  obj: "2345"
 }
 ```
 
 Response:
 
 method = `get-r`
-payload.value = value (see above)
-payload.call = the passed-in call ID
+payload = value (see above)
 
 ## Setters
 
@@ -153,15 +149,13 @@ payload =
 {
   name: "owner",
   value: "Wilma" (value),
-  obj: "2345",
-  call: "1234"
+  obj: "2345"
 }
 ```
 
 Response:
 
 method = `set-r`
-payload.call = the passed-in call ID
 
 ## new
 
@@ -174,16 +168,14 @@ payload =
   className: "Car",
   args: [
     "Wilma" (value)
-  ],
-  call: "1234"
+  ]
 }
 ```
 
 Response:
 
 method = `new-r`
-payload.obj = object description (see above)
-payload.call = the passed-in call ID
+payload = object description (see above)
 
 ## delete
 

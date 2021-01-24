@@ -6,8 +6,8 @@
   },
   "devDependencies": {
   },
+  "type": "module",
   "scripts": {
-    "test": "node test.js"
   },
   "private": true,
   "repository": {
