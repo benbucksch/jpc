@@ -1,4 +1,4 @@
-# jpc - Remote procedure calls between JS object
+# jpc - Remote procedure calls between JS objects
 
 jpc allows you to call JS objects in other processes. From your JS objects, it automatically
 creates an API that resembles your object API, just with an `await` in front of every call.
@@ -21,10 +21,12 @@ This is what your client calls initially and gets the first object references fr
 
 The remote API is the same as the local API, just with an `await` prepended to all calls. Unless you're constructing new remote objects or using setters.
 
-* function: `car.startEngine()` -> `await car.startEngine()` - same, just with `await`
-* getter: `car.owner` -> `await car.owner` - same, just with `await`
-* setter: `car.owner = val` -> `await car.setOwner(val)` - because setters always return the assigned value and cannot return a Promise
-* new: `new Car()` -> `await Car.newRemove()` - because `new` always returns the object and cannot return a Promise
+|          | Local object        | Remote object             | Difference                                                                     |
+|----------|---------------------|---------------------------|--------------------------------------------------------------------------------|
+| function | `car.startEngine()` | `await car.startEngine()` | same, just with `await`                                                        |
+| getter   | `car.owner`         | `await car.owner`         | same, just with `await`                                                        |
+| setter   | `car.owner = val`   | `await car.setOwner(val)` | because setters always return the assigned value and cannot return a `Promise` |
+| new      | `new Car()`         | `await Car.newRemove()`   | because `new` always returns the object and cannot return a `Promise`          |
 
 #### Example
 
