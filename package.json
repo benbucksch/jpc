@@ -1,0 +1,30 @@
+{
+  "name": "jpc",
+  "version": "0.1.0",
+  "description": "Allows remote procedure calls between JS objects over event-like channels or the network",
+  "dependencies": {
+  },
+  "devDependencies": {
+  },
+  "scripts": {
+    "test": "node test.js"
+  },
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/benbucksch/jpc.git"
+  },
+  "keywords": [
+    "rpc",
+    "ipc",
+    "remote",
+    "corba",
+    "electron"
+  ],
+  "author": "Ben Bucksch",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/benbucksch/jpc/issues"
+  },
+  "homepage": "https://github.com/benbucksch/jpc#readme"
+}
