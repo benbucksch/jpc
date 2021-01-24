@@ -64,7 +64,7 @@ Notes:
 
 ## Object reference
 
-The client passes a reference to a server object to the server:
+Pass a reference to a remote object to the remote end:
 
 ```
 {
@@ -72,7 +72,7 @@ The client passes a reference to a server object to the server:
 }
 ```
 
-The client passes a reference to a client object to the server:
+Pass a reference to a local object to the remote end:
 
 ```
 {
@@ -82,6 +82,7 @@ The client passes a reference to a client object to the server:
 
 Note:
 * This MUST have been preceeded by an object description with this ID.
+* "Remote" and "local" are from the perspective of the sending party. That means, when receiving, "remote" means local and "local" means remote.
 
 ## Value
 

@@ -63,11 +63,13 @@ function registerRemoteClass(classDescrJSON) {
   for (let getter of classDescrJSON.getters) {
     Object.defineProperty(proto, getter, {
       enumerable: true,
-      writable: getter.hasSetter,
+      writable: false,
       get: makeGetter(getter.name),
-      set: getter.hasSetter ? makeSetter(getter.name) : undefined,
     });
+    let setterName = "set" + getterName[0].toUpperCase() + getter.name.substr(1);
+    proto[setterName] = makeSetter(getter.name);
   }
+  proto.newRemote = makeNewObj(classDescrJSON.className); // TODO static function
   this._classes.set(classDescrJSON.className, proto);
 }
 
@@ -148,9 +150,9 @@ function mapIncomingObjects(value) {
     if (value.id && value.className) { // object description
       return makeStub(value);
     } else if (value.idRemote) {
-      return getRemoteObject(value.idRemote);
+      return getLocalObject(value.idRemote);
     } else if (value.idLocal) {
-      return getLocalObject(value.idLocal);
+      return getRemoteObject(value.idLocal);
     }
   }
 }
@@ -259,7 +261,7 @@ function mapOutgoingObjects(value) {
     console.log("Sending object", value);
     if (value instanceof RemoteClass) { // TODO check working?
       return { // Object reference for remote object
-        idLocal: value.id,
+        idRemote: value.id,
       };
     }
 
@@ -274,7 +276,7 @@ function mapOutgoingObjects(value) {
     let id = getExistingIDForLocalObject(value);
     if (id) {
       return { // Object reference for local object
-        idRemote: id,
+        idLocal: id,
       };
     }
 

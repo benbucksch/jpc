@@ -19,14 +19,14 @@ This is what your client calls initially and gets the first object references fr
 
 ### Objects
 
-The remote API is the same as the local API, just with an `await` prepended to all calls. Unless you're constructing new remote objects or using setters.
+The remote API is the same as the local API, just with an `await` prepended to all calls, aside from `new` and setters.
 
 |          | Local object        | Remote object             | Difference                                       |
 |----------|---------------------|---------------------------|--------------------------------------------------|
 | function | `car.startEngine()` | `await car.startEngine()` | same, just with `await`                          |
 | getter   | `car.owner`         | `await car.owner`         | same, just with `await`                          |
 | setter   | `car.owner = val`   | `await car.setOwner(val)` | because setters always return the assigned value |
-| new      | `new Car()`         | `await Car.newRemove()`   | because `new` always returns the object          |
+| new      | `new Car()`         | `await Car.newRemote()`   | because `new` always returns the object          |
 
 #### Example
 
@@ -52,7 +52,7 @@ class Car extends Movable {
 }
 ```
 
-The local API in the server process is obviously standard JS:
+The local API in the server process is standard JS:
 ```
 let car = new Car();
 car.owner = "Wilma";
@@ -65,5 +65,5 @@ The client API in the other process is almost the same, just with an `await` add
 let car = await Car.newRemote(); // creates a new object in the server process
 await car.setOwner("Wilma");
 console.log(await car.owner); // shows "Wilma" on the client
-awaít car.startEngine(); // shows "Engine started" on the server
+await car.startEngine(); // shows "Engine started" on the server
 ```
