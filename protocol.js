@@ -31,7 +31,8 @@ function registerIncomingCall(method, listener) {
  */
 async function callRemote(method, responseMethod, payload) {
   let callID = responseMethod ? Math.random() * 10^20 : 0;
-  await TODO(method, callID, payload);
+  payload.callID = callID;
+  await TODO(method, payload);
   if (responseMethod) {
     //return await waitForIncomingCall(responseMethod, callID);
     return new Promise((resolved, rejected) => {

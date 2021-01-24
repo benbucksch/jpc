@@ -1,3 +1,4 @@
+import { assert } from "jpc/util";
 
 function start(callRemote, registerIncomingCall) {
   registerIncomingCall("class", registerRemoteClass);
@@ -45,9 +46,7 @@ function registerRemoteClass(classDescrJSON) {
   let parent;
   if (classDescrJSON.extends) {
     parent = this._classes.get(classDescrJSON.extends);
-    if (!parent) {
-      throw new Error(`Super class ${ objDescrJSON.extends } is unknown here. Make sure to first push the super class description before the subclass description.`);
-    }
+    assert(parent, `Super class ${ objDescrJSON.extends } is unknown here. Make sure to first push the super class description before the subclass description.`);
   }
 
   let proto;
@@ -88,9 +87,7 @@ class StubObject {
  */
 function makeStub(objDescrJSON) {
   let proto = gRemoteClasses.get(objDescrJSON.className);
-  if (!proto) {
-    throw new Error(`Remote class ${ objDescrJSON.className } is unknown here. Make sure to first push the class description.`);
-  }
+  assert(proto, `Remote class ${ objDescrJSON.className } is unknown here. Make sure to first push the class description.`);
   let stub = Object.create(proto);
   stub.id = addRemoteObject(stub);
   for (let propName in objDescrJSON.properties) {
@@ -102,7 +99,7 @@ function makeStub(objDescrJSON) {
 function makeFunction(functionName) {
   // this == stub object
   return (...args) => callRemote("func", "func-r", {
-    id: this.id,
+    obj: this.id,
     name: functionName,
     args: args,
   });
@@ -111,7 +108,7 @@ function makeFunction(functionName) {
 function makeGetter(propName) {
   // this == stub object
   return () => callRemote("get", "set-r", {
-    id: this.id,
+    obj: this.id,
     name: propName,
   });
 }
@@ -119,7 +116,7 @@ function makeGetter(propName) {
 function makeSetter(propName) {
   // this == stub object
   return val => callRemote("set", "set-r", {
-    id: this.id,
+    obj: this.id,
     name: propName,
     value: val,
   });
@@ -163,18 +160,14 @@ function mapIncomingObjects(value) {
 // Passing a normal local JS object to the remote side
 
 async function newObjListener(callID, payload) {
-  if (typeof(payload.className) != "string") {
-    throw new Error("Need class name");
-  }
+  assert(typeof(payload.className) == "string", "Need class name");
   let classCtor = global[payload.className];
   let obj;
   let args = payload.args;
   if (typeof(args) == "undefined") {
     obj = classCtor();
   } else {
-    if (!Array.isArray(args))) {
-      throw new Error("Constructor arguments must be an array of values");
-    }
+    assert(Array.isArray(args), "Constructor arguments must be an array of values");
     args = mapIncomingObjects(args);
     obj = classCtor(...args);
   }
@@ -187,12 +180,8 @@ async function newObjListener(callID, payload) {
 
 async function funcListener(callID, payload) {
   let name = payload.name;
-  if (typeof(name) != "string") {
-    throw new Error("Need function name");
-  }
-  if (typeof(payload.obj) != "string") {
-    throw new Error("Need object ID");
-  }
+  assert(typeof(name) == "string", "Need function name");
+  assert(typeof(payload.obj) == "string", "Need object ID");
   let obj = getLocalObject(payload.obj);
   let args = mapIncomingObjects(payload.args);
 
@@ -207,12 +196,8 @@ async function funcListener(callID, payload) {
 
 async function getterListener(callID, payload) {
   let name = payload.name;
-  if (typeof(name) != "string") {
-    throw new Error("Need property getter name");
-  }
-  if (typeof(payload.obj) != "string") {
-    throw new Error("Need object ID");
-  }
+  assert(typeof(name) == "string", "Need property getter name");
+  assert(typeof(payload.obj) == "string", "Need object ID");
   let obj = getLocalObject(payload.obj);
 
   // may throw
@@ -226,12 +211,8 @@ async function getterListener(callID, payload) {
 
 async function setterListener(callID, payload) {
   let name = payload.name;
-  if (typeof(name) != "string") {
-    throw new Error("Need property setter name");
-  }
-  if (typeof(payload.obj) != "string") {
-    throw new Error("Need object ID");
-  }
+  assert(typeof(name) == "string", "Need property setter name");
+  assert(typeof(payload.obj) == "string", "Need object ID");
   let obj = getLocalObject(payload.obj);
   let value = mapIncomingObjects(payload.value);
 
@@ -297,9 +278,7 @@ function createObjectDescription(obj, id) {
     props[propName] = obj[propName];
   }
   let className = obj.constructor.name;
-  if (!className) {
-    throw new Error("Could not find class name for local object");
-  }
+  assert(className, "Could not find class name for local object");
   return {
     id: id,
     className: className,
@@ -334,9 +313,7 @@ function generateObjID() {
  */
 function getRemoteObject(id) {
   let obj = gRemoteObjects.get(id);
-  if (!obj) {
-    throw new Error(`Remote object with ID ${ id } is unknown here.`);
-  }
+  assert(obj, `Remote object with ID ${ id } is unknown here.`);
   return obj;
 }
 
@@ -346,9 +323,7 @@ function getRemoteObject(id) {
  */
 function getLocalObject(id) {
   let obj = gLocalIDsToObjects.get(id);
-  if (!obj) {
-    throw new Error(`Local object with ID ${ id } is unknown here.`);
-  }
+  assert(obj, `Local object with ID ${ id } is unknown here.`);
   return obj;
 }
 
@@ -379,9 +354,7 @@ function getNewIDForLocalObject(obj) {
  */
 function addRemoteObject(id, obj) {
   let obj = gRemoteObjects.get(id);
-  if (obj) {
-    throw new Error(`Remote object ID ${ id } already exists.`);
-  }
+  assert( !obj, `Remote object ID ${ id } already exists.`);
   gRemoteObjects.set(id, obj);
   gRemoteObjectRegistry.register(obj, id);
 }
@@ -393,9 +366,7 @@ function addRemoteObject(id, obj) {
  */
 function deleteRemoteObject(id) {
   let obj = gRemoteObjects.get(id);
-  if (!obj) {
-    throw new Error(`Remote object with ID ${ id } is unknown here.`);
-  }
+  assert(obj, `Remote object with ID ${ id } is unknown here.`);
   gRemoteObjects.delete(id);
 }
 
@@ -406,9 +377,7 @@ function deleteRemoteObject(id) {
  */
 function deleteLocalObject(id) {
   let obj = gLocalIDsToObjects.get(id);
-  if (!obj) {
-    throw new Error(`Local object with ID ${ id } is unknown here.`);
-  }
+  assert(obj, `Local object with ID ${ id } is unknown here.`);
   gLocalIDsToObjects.delete(id);
   gLocalObjectsToIDs.delete(obj);
 }
