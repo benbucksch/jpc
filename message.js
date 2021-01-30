@@ -49,7 +49,10 @@ export default class MessageCall  {
     // Subclasses: call `this._incomingMessage(messageStr)` when new messages arrive.
   }
 
-  send(messageStr) {
+  /**
+   * @param message {JSON}
+   */
+  send(message) {
     throw new Error("Implement this");
   }
 
@@ -67,9 +70,14 @@ export default class MessageCall  {
     this._functions[path] = func;
   }
 
+  /**
+   * @param message {JSON or JSON as string}
+   */
   async _incomingMessage(message) {
     try {
-      message = JSON.parse(message);
+      if (typeof(message) == "string") {
+        message = JSON.parse(message);
+      }
     } catch (ex) {
       return;
     }
@@ -89,21 +97,21 @@ export default class MessageCall  {
       if (result instanceof Promise) {
         result = await result;
       }
-      this.send(JSON.stringify({
+      this.send({
         id: message.id,
         success: true,
         result: result,
-      }));
+      });
     } catch (ex) {
       // Error in function called by remote side
       console.error(ex);
-      this.send(JSON.stringify({
+      this.send({
         id: message.id,
         success: false,
         message: ex.message,
         code: ex.code,
         //exception: ex,
-      }));
+      });
     }
   }
 
@@ -125,11 +133,11 @@ export default class MessageCall  {
         resolve: resolve,
         reject: reject,
       };
-      this.send(JSON.stringify({
+      this.send({
         id: id,
         path: path,
         arg: arg,
-      }));
+      });
       // message will be processed on the other side
       // then they will send us a response with message.result
     });
