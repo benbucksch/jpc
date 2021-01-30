@@ -9,11 +9,6 @@
   "type": "module",
   "scripts": {
   },
-  "private": true,
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/benbucksch/jpc.git"
-  },
   "keywords": [
     "rpc",
     "ipc",
@@ -23,6 +18,10 @@
   ],
   "author": "Ben Bucksch",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/benbucksch/jpc.git"
+  },
   "bugs": {
     "url": "https://github.com/benbucksch/jpc/issues"
   },
