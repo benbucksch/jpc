@@ -1,4 +1,4 @@
-# jpc - Remote procedure calls between JS objects
+# jpc - Remote procedure calls between JS objects in different processes
 
 jpc allows you to call JS objects in other processes. From your JS objects, it automatically
 creates an API that resembles your object API, just with an `await` in front of every call.
@@ -6,8 +6,8 @@ It then transmits the call over the channel and call the objects in the remote p
 and returns the result back to you.
 
 It can work over various communication channels to communicate with the remote process:
-* WebSockets
-* Electron IPC
+* [WebSockets](https://github.com/benbucksch/jpc-ws)
+* [Electron IPC](https://github.com/benbucksch/jpc-electron-ipc)
 * DOM events
 * TCP
 
