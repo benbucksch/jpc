@@ -265,7 +265,7 @@ async function mapOutgoingObjects(value) {
 
     if (obj.constructor.name == "Object") { // JSON object -- TODO better way to check?
       let json = {};
-      for (let propName of obj.keys()) {
+      for (let propName in obj) {
         json[propName] = await mapOutgoingObjects(obj[propName]);
       }
       return json;
