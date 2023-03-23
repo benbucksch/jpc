@@ -17,7 +17,7 @@ export function start(jpcProtocol, startObject) {
   jpcProtocol.registerIncomingCall("del", payload => {
     deleteLocalObject(payload.idRemote);
   });
-  if ("FinalizationRegistry" in global) {
+  if (globalThis && "FinalizationRegistry" in globalThis) {
     gRemoteObjectRegistry = new FinalizationRegistry(id => {
       jpcProtocol.callRemote("del", null, {
         idRemote: id,
