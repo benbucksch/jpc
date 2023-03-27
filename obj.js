@@ -22,7 +22,7 @@ export function start(jpcProtocol, startObject) {
     gRemoteObjectRegistry = new FinalizationRegistry(id => {
       jpcProtocol.callRemote("del", {
         idRemote: id,
-      }).catch(console.error);
+      }).catch(consoleError);
     });
     // TODO Free everything when client disconnects
     // See <https://github.com/tc39/proposal-weakrefs/blob/master/reference.md#notes-on-cleanup-callbacks>

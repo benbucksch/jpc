@@ -101,7 +101,8 @@ export default class MessageCall  {
       });
     } catch (ex) {
       // Error in function called by remote side
-      console.error(ex);
+      console.error(`Error, in function on our side, called by remote side. Function ${message.path}, args ${message.arg || 'none'}, function ${this._functions[message.path]}`);
+      consoleError(ex);
       this.send({
         id: message.id,
         success: false,

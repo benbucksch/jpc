@@ -7,3 +7,9 @@ export function assert(test, errorMsg) {
     throw new Error(errorMsg || "Assertion failed");
   }
 }
+
+export function consoleError(ex) {
+  console.error(ex);
+  console.trace(ex);
+}
+
