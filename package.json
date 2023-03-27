@@ -5,6 +5,7 @@
   "dependencies": {},
   "devDependencies": {},
   "scripts": {},
+  "type": "module",
   "keywords": [
     "rpc",
     "ipc",
