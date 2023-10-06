@@ -86,12 +86,14 @@ function registerRemoteClass(classDescrJSON) {
     proto[func.name] = makeFunction(func.name);
   }
   for (let getter of classDescrJSON.getters) {
-    Object.defineProperty(proto, getter, {
+    Object.defineProperty(proto, getter.name, {
       enumerable: true,
       get: makeGetter(getter.name),
     });
-    let setterName = "set" + getter.name[0].toUpperCase() + getter.name.substr(1);
-    proto[setterName] = makeSetter(getter.name);
+    if (getter.hasSetter) {
+      let setterName = "set" + getter.name[0].toUpperCase() + getter.name.substr(1);
+      proto[setterName] = makeSetter(getter.name);
+    }
   }
   proto.newRemote = makeNewObj(classDescrJSON.className); // TODO static function
   gRemoteClasses.set(classDescrJSON.className, proto);
