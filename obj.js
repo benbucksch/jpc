@@ -174,7 +174,7 @@ export function mapIncomingObjects(value) {
       value == null) {
     return value;
   } else if (Array.isArray(value)) {
-    return value.map(el => mapIncomingObjects(el));
+    return value.map(mapIncomingObjects);
   } else if (typeof(value) == "object") {
     let obj = value;
     if (obj.id && obj.className) { // object description
@@ -258,7 +258,7 @@ async function mapOutgoingObjects(value) {
       value == null) {
     return value;
   } else if (Array.isArray(value)) {
-    return Promise.all(value.map(async el => await mapOutgoingObjects(el)));
+    return Promise.all(value.map(mapOutgoingObjects));
   } else if (typeof(value) == "object") {
     let obj = value;
     if (obj instanceof RemoteClass) { // TODO check working?
@@ -288,10 +288,10 @@ async function mapOutgoingObjects(value) {
 
 
 /**
- * Whether the local class description was already sent to the remote end.
- * { Map className {string} -> sent {boolean} }
+ * Contains local class descriptions that were already sent to the remote end.
+ * { Set className {string} }
  */
-var gLocalClasses = new Map();
+var gLocalClasses = new Set();
 
 /**
  * Return an object instance to the remote party that they did not see yet.
@@ -304,7 +304,7 @@ var gLocalClasses = new Map();
 async function createObjectDescription(obj, id) {
   let className = obj.constructor.name;
   assert(className, "Could not find class name for local object");
-  if ( !gLocalClasses.get(className)) {
+  if ( !gLocalClasses.has(className)) {
     await sendClassDescription(className, obj);
   }
 
@@ -328,10 +328,10 @@ async function createObjectDescription(obj, id) {
 }
 
 async function sendClassDescription(className, instance) {
-  if (gLocalClasses.get(className)) {
+  if (gLocalClasses.has(className)) {
     return;
   }
-  gLocalClasses.set(className, true);
+  gLocalClasses.add(className);
 
   let proto;
   if (instance) {
@@ -394,8 +394,12 @@ var gLocalIDsToObjects = new Map();
  */
 var gLocalObjectsToIDs = new Map();
 
-function generateObjID() {
-  return Math.round(Math.random() * 10^20) + "";
+function generateNewObjID() {
+  let id;
+  do {
+    id = (Math.random() * 1e20).toFixed();
+  } while (gLocalIDsToObjects.has(id));
+  return id;
 }
 
 /**
@@ -431,10 +435,7 @@ function getExistingIDForLocalObject(obj) {
  * @returns {string} ID
  */
 function getNewIDForLocalObject(obj) {
-  let id;
-  do {
-    id = generateObjID();
-  } while (gLocalIDsToObjects.has(id))
+  let id = generateNewObjID();
   gLocalIDsToObjects.set(id, obj);
   gLocalObjectsToIDs.set(obj, id);
   return id;
