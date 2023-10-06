@@ -170,7 +170,8 @@ function makeNewObj(className) {
 export function mapIncomingObjects(value) {
   if (typeof(value) == "string" ||
       typeof(value) == "number" ||
-      typeof(value) == "boolean") {
+      typeof(value) == "boolean" ||
+      value == null) {
     return value;
   } else if (Array.isArray(value)) {
     return value.map(el => mapIncomingObjects(el));
@@ -253,7 +254,8 @@ async function setterListener(payload) {
 async function mapOutgoingObjects(value) {
   if (typeof(value) == "string" ||
       typeof(value) == "number" ||
-      typeof(value) == "boolean") {
+      typeof(value) == "boolean" ||
+      value == null) {
     return value;
   } else if (Array.isArray(value)) {
     return Promise.all(value.map(async el => await mapOutgoingObjects(el)));
