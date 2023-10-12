@@ -183,6 +183,12 @@ export function mapIncomingObjects(value) {
       return getLocalObject(obj.idRemote);
     } else if (obj.idLocal) {
       return getRemoteObject(obj.idLocal);
+    } else if (obj.json) {
+      let json = {};
+      for (let propName in obj.json) {
+        json[propName] = mapIncomingObjects(obj.json[propName]);
+      }
+      return json;
     }
   }
 }
@@ -272,7 +278,9 @@ async function mapOutgoingObjects(value) {
       for (let propName in obj) {
         json[propName] = await mapOutgoingObjects(obj[propName]);
       }
-      return json;
+      return {
+        json: json,
+      };
     }
 
     let id = getExistingIDForLocalObject(obj);
