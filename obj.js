@@ -120,7 +120,7 @@ function makeStub(objDescrJSON) {
 function makeFunction(functionName) {
   return function(...args) {
     // this == stub object
-    callRemote("func", "func-r", {
+    return callRemote("func", "func-r", {
       obj: this.id,
       name: functionName,
       args: args,
@@ -132,7 +132,7 @@ function makeGetter(propName) {
   // this == stub object
   return function() {
     // this == stub object
-    callRemote("get", "set-r", {
+    return callRemote("get", "set-r", {
       obj: this.id,
       name: propName,
     });
@@ -142,7 +142,7 @@ function makeGetter(propName) {
 function makeSetter(propName) {
   return function(val) {
     // this == stub object
-    callRemote("set", "set-r", {
+    return callRemote("set", "set-r", {
       obj: this.id,
       name: propName,
       value: val,
@@ -153,7 +153,7 @@ function makeSetter(propName) {
 function makeNewObj(className) {
   return function(...args) {
     // this == stub object
-    callRemote("new", "new-r", {
+    return callRemote("new", "new-r", {
       className: className,
       args: args,
     });
