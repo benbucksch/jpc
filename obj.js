@@ -309,15 +309,19 @@ async function createObjectDescription(obj, id) {
   }
 
   let props = null;
-  for (let propName in obj) {
-    if (propName.startsWith("_") ||
-        typeof(obj[propName]) == "function") {
+  for (let propName of Object.getOwnPropertyNames(obj)) {
+    if (propName.startsWith("_")) {
+      continue;
+    }
+    let property = Object.getOwnPropertyDescriptor(obj, propName);
+    if (property.get ||
+        typeof(property.value) == "function") {
       continue;
     }
     if ( !props) {
       props = {};
     }
-    props[propName] = await mapOutgoingObjects(obj[propName]);
+    props[propName] = await mapOutgoingObjects(property.value);
   }
 
   return {
@@ -355,13 +359,13 @@ async function sendClassDescription(className, instance) {
     if (propName.startsWith("_") || propName == "constructor") {
       continue;
     }
-    if (typeof(proto[propName]) == "function") {
+    let property = Object.getOwnPropertyDescriptor(proto, propName);
+    if (typeof(property.value) == "function") {
       descr.functions.push({
         name: propName,
       });
       continue;
     }
-    let property = Object.getOwnPropertyDescriptor(proto, propName);
     if (typeof(property.get) == "function") {
       descr.getters.push({
         name: propName,
