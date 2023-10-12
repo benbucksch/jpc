@@ -19,7 +19,7 @@ export function start(jpcProtocol, startObject) {
   });
   if (globalThis && "FinalizationRegistry" in globalThis) {
     gRemoteObjectRegistry = new FinalizationRegistry(id => {
-      jpcProtocol.callRemote("del", null, {
+      jpcProtocol.callRemote("del", {
         idRemote: id,
       }).catch(console.error);
     });
@@ -120,7 +120,7 @@ function makeStub(objDescrJSON) {
 function makeFunction(functionName) {
   return function(...args) {
     // this == stub object
-    return callRemote("func", "func-r", {
+    return callRemote("func", {
       obj: this.id,
       name: functionName,
       args: args,
@@ -132,7 +132,7 @@ function makeGetter(propName) {
   // this == stub object
   return function() {
     // this == stub object
-    return callRemote("get", "set-r", {
+    return callRemote("get", {
       obj: this.id,
       name: propName,
     });
@@ -142,7 +142,7 @@ function makeGetter(propName) {
 function makeSetter(propName) {
   return function(val) {
     // this == stub object
-    return callRemote("set", "set-r", {
+    return callRemote("set", {
       obj: this.id,
       name: propName,
       value: val,
@@ -153,7 +153,7 @@ function makeSetter(propName) {
 function makeNewObj(className) {
   return function(...args) {
     // this == stub object
-    return callRemote("new", "new-r", {
+    return callRemote("new", {
       className: className,
       args: args,
     });
@@ -386,7 +386,7 @@ async function sendClassDescription(className, instance) {
     });
   }
 
-  await callRemote("class", "class-r", [ descr ]);
+  await callRemote("class", [ descr ]);
 }
 
 
