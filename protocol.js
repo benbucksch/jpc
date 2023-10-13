@@ -1,13 +1,14 @@
-import { start, mapIncomingObjects } from "./obj.js";
+import BaseProtocol from "./obj.js";
 
 /**
  * Wire protocol API
  */
-export default class JPCProtocol {
+export default class JPCProtocol extends BaseProtocol {
   /**
    * @param startObject {Object} Will be returned to client in "start" function
    */
   constructor(startObject) {
+    super();
     this._startObject = startObject;
   }
 
@@ -16,12 +17,12 @@ export default class JPCProtocol {
    *
    * @param startObject {Object} Will be returned to client in "start" function
    */
-  async init() {
-    start(this, this._startObject);
+  init() {
+    this.start(this._startObject);
   }
 
   async getRemoteStartObject() {
-    return mapIncomingObjects(await this.callRemote("start"));
+    return this.mapIncomingObjects(await this.callRemote("start"));
   }
 
   /**
