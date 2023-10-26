@@ -118,24 +118,24 @@ function makeStub(objDescrJSON) {
 }
 
 function makeFunction(functionName) {
-  return function(...args) {
+  return async function(...args) {
     // this == stub object
-    return callRemote("func", {
+    return mapIncomingObjects(await callRemote("func", {
       obj: this.id,
       name: functionName,
       args: args,
-    });
+    }));
   }
 }
 
 function makeGetter(propName) {
   // this == stub object
-  return function() {
+  return async function() {
     // this == stub object
-    return callRemote("get", {
+    return mapIncomingObjects(await callRemote("get", {
       obj: this.id,
       name: propName,
-    });
+    }));
   }
 }
 
@@ -151,12 +151,12 @@ function makeSetter(propName) {
 }
 
 function makeNewObj(className) {
-  return function(...args) {
+  return async function(...args) {
     // this == stub object
-    return callRemote("new", {
+    return mapIncomingObjects(await callRemote("new", {
       className: className,
       args: args,
-    });
+    }));
   }
 }
 
