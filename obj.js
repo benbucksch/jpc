@@ -123,7 +123,7 @@ function makeFunction(functionName) {
     return mapIncomingObjects(await callRemote("func", {
       obj: this.id,
       name: functionName,
-      args: args,
+      args: await mapOutgoingObjects(args),
     }));
   }
 }
@@ -140,12 +140,12 @@ function makeGetter(propName) {
 }
 
 function makeSetter(propName) {
-  return function(val) {
+  return async function(val) {
     // this == stub object
     return callRemote("set", {
       obj: this.id,
       name: propName,
-      value: val,
+      value: await mapOutgoingObjects(val),
     });
   }
 }
@@ -155,7 +155,7 @@ function makeNewObj(className) {
     // this == stub object
     return mapIncomingObjects(await callRemote("new", {
       className: className,
-      args: args,
+      args: await mapOutgoingObjects(args),
     }));
   }
 }
