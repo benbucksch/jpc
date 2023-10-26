@@ -224,7 +224,7 @@ async function funcListener(payload) {
   // may throw
   let result = obj[name](...args);
 
-  return await mapOutgoingObjects(result);
+  return await mapOutgoingObjects(await result);
 }
 
 async function getterListener(payload) {
