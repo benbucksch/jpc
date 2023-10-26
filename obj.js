@@ -11,6 +11,7 @@ export function start(jpcProtocol, startObject) {
   jpcProtocol.registerIncomingCall("class", registerRemoteClass);
   jpcProtocol.registerIncomingCall("start", async () => await mapOutgoingObjects(startObject));
   jpcProtocol.registerIncomingCall("new", newObjListener);
+  jpcProtocol.registerIncomingCall("call", callListener);
   jpcProtocol.registerIncomingCall("func", funcListener);
   jpcProtocol.registerIncomingCall("get", getterListener);
   jpcProtocol.registerIncomingCall("set", setterListener);
@@ -117,6 +118,15 @@ function makeStub(objDescrJSON) {
   return stub;
 }
 
+function makeCallable(id) {
+  return async function(...args) {
+    return mapIncomingObjects(await callRemote("call", {
+      obj: id,
+      args: await mapOutgoingObjects(args),
+    }));
+  }
+}
+
 function makeFunction(functionName) {
   return async function(...args) {
     // this == stub object
@@ -177,7 +187,11 @@ export function mapIncomingObjects(value) {
     return value.map(mapIncomingObjects);
   } else if (typeof(value) == "object") {
     let obj = value;
-    if (obj.id && obj.className) { // object description
+    if (obj.id && obj.className == "Function") {
+      let stub = makeCallable(obj.id);
+      addRemoteObject(obj.id, stub);
+      return stub;
+    } else if (obj.id && obj.className) { // object description
       return makeStub(obj);
     } else if (obj.idRemote) {
       return getLocalObject(obj.idRemote);
@@ -212,6 +226,17 @@ async function newObjListener(payload) {
   }
 
   return createObjectDescription(obj, getNewIDForLocalObject(obj));
+}
+
+async function callListener(payload) {
+  assert(typeof(payload.obj) == "number", "Need object ID");
+  let obj = getLocalObject(payload.obj);
+  let args = mapIncomingObjects(payload.args);
+
+  // may throw
+  let result = obj(...args);
+
+  return await mapOutgoingObjects(await result);
 }
 
 async function funcListener(payload) {
@@ -265,6 +290,18 @@ async function mapOutgoingObjects(value) {
     return value;
   } else if (Array.isArray(value)) {
     return Promise.all(value.map(mapOutgoingObjects));
+  } else if (typeof(value) == "function") {
+    let id = getExistingIDForLocalObject(value);
+    if (id) {
+      return { // Object reference for local object
+        idLocal: id,
+      };
+    }
+    id = getNewIDForLocalObject(value);
+    return {
+      id: id,
+      className: "Function",
+    };
   } else if (typeof(value) == "object") {
     let obj = value;
     if (obj instanceof RemoteClass) { // TODO check working?
