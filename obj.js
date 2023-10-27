@@ -1,5 +1,10 @@
 import { assert } from "./util.js";
 
+function getClassName(obj) {
+  let proto = Object.getPrototypeOf(obj);
+  return (proto && (proto[Symbol.toStringTag] || proto.constructor.name)) || "Object";
+}
+
 class RemoteClass {
   constructor(className) {
     this.className = className;
@@ -24,6 +29,7 @@ export default class BaseProtocol {
     this.registerIncomingCall("start", this.mapOutgoingObjects.bind(this, startObject));
     this.registerIncomingCall("new", this.newObjListener.bind(this));
     this.registerIncomingCall("call", this.callListener.bind(this));
+    this.registerIncomingCall("iter", this.iterListener.bind(this));
     this.registerIncomingCall("func", this.funcListener.bind(this));
     this.registerIncomingCall("get", this.getterListener.bind(this));
     this.registerIncomingCall("set", this.setterListener.bind(this));
@@ -87,6 +93,9 @@ export default class BaseProtocol {
     } else {
       proto = new RemoteClass(classDescrJSON.className);
     }
+    if (classDescrJSON.iterator) {
+      proto[Symbol.asyncIterator] = this.makeIterator(classDescrJSON.iterator);
+    }
     for (let func of classDescrJSON.functions) {
       proto[func.name] = this.makeFunction(func.name);
     }
@@ -128,6 +137,22 @@ export default class BaseProtocol {
         obj: id,
         args: await this.mapOutgoingObjects(args),
       }));
+    }
+  }
+
+  makeIterator(symbolName) {
+    let self = this;
+    return async function*() {
+      let remote = self.mapIncomingObjects(await self.callRemote("iter", {
+        obj: this.id,
+        symbol: symbolName,
+      }));
+      // This object will probably be an iterable iterator,
+      // but we don't want to remote that call.
+      Object.getPrototypeOf(remote)[Symbol.asyncIterator] = function() { return this; };
+      for await (let value of remote) {
+        yield value;
+      }
     }
   }
 
@@ -246,6 +271,18 @@ export default class BaseProtocol {
     return await this.mapOutgoingObjects(await result);
   }
 
+  async iterListener(payload) {
+    let symbol = payload.symbol;
+    assert(typeof(symbol) == "string", "Need symbol name");
+    assert(typeof(payload.obj) == "number", "Need object ID");
+    let obj = this.getLocalObject(payload.obj);
+
+    // may throw
+    let result = obj[Symbol[symbol]]();
+
+    return await this.mapOutgoingObjects(result);
+  }
+
   async funcListener(payload) {
     let name = payload.name;
     assert(typeof(name) == "string", "Need function name");
@@ -317,7 +354,7 @@ export default class BaseProtocol {
         };
       }
 
-      if (obj.constructor.name == "Object") { // JSON object -- TODO better way to check?
+      if (getClassName(obj) == "Object") { // JSON object -- TODO better way to check?
         let json = {};
         for (let propName in obj) {
           json[propName] = await this.mapOutgoingObjects(obj[propName]);
@@ -354,7 +391,7 @@ export default class BaseProtocol {
    * @returns {JSON} Object description, see PROTOCOL.md
    */
   async createObjectDescription(obj, id) {
-    let className = obj.constructor.name;
+    let className = getClassName(obj);
     assert(className, "Could not find class name for local object");
     if ( !this._localClasses.has(className)) {
       await this.sendClassDescription(className, obj);
@@ -396,17 +433,22 @@ export default class BaseProtocol {
 
     let descr = {
       className: className,
+      iterator: null,
       functions: [],
       getters: [],
       properties: [],
     };
 
-    let parentClass = Object.getPrototypeOf(proto);
-    if (parentClass && parentClass.constructor.name != "Object") {
-      descr.extends = parentClass.constructor.name;
+    if (getClassName(proto) != "Object") {
+      descr.extends = getClassName(proto);
       await this.sendClassDescription(descr.extends, proto);
     }
 
+    if (Symbol.asyncInterator in proto) {
+      descr.iterator = "asyncIterator";
+    } else if (Symbol.iterator in proto) {
+      descr.iterator = "iterator";
+    }
     for (let propName of Object.getOwnPropertyNames(proto)) {
       if (propName.startsWith("_") || propName == "constructor") {
         continue;
