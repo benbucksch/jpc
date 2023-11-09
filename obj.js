@@ -37,7 +37,11 @@ export default class BaseProtocol {
       this.deleteLocalObject(payload.idRemote);
     });
     if (globalThis && "FinalizationRegistry" in globalThis) {
+      this._localObjectRegistry = new FinalizationRegistry(id => {
+        this._localIDsToObjects.delete(id);
+      });
       this._remoteObjectRegistry = new FinalizationRegistry(id => {
+        this._remoteObjects.delete(id);
         this.callRemote("del", {
           idRemote: id,
         }).catch(console.error);
@@ -47,6 +51,9 @@ export default class BaseProtocol {
       // and <https://github.com/tc39/proposal-weakrefs/issues/125>
     } else { // not supported, use dummy
       console.warn("FinalizationRegistry is not supported. This will leak everything. Please update node.js.");
+      this._localObjectRegistry = {
+        register: () => {},
+      };
       this._remoteObjectRegistry = {
         register: () => {},
       };
@@ -123,8 +130,8 @@ export default class BaseProtocol {
     let proto = this._remoteClasses.get(objDescrJSON.className);
     assert(proto, `Remote class ${ objDescrJSON.className } is unknown here. Make sure to first push the class description.`);
     let stub = Object.create(proto);
-    stub.id = objDescrJSON.id;
-    this.addRemoteObject(objDescrJSON.id, stub);
+    stub.id = objDescrJSON.idLocal;
+    this.addRemoteObject(objDescrJSON.idLocal, stub);
     for (let propName in objDescrJSON.properties) {
       stub[propName] = this.mapIncomingObjects(objDescrJSON.properties[propName]);
     }
@@ -219,16 +226,19 @@ export default class BaseProtocol {
       return value.map(el => this.mapIncomingObjects(el));
     } else if (typeof(value) == "object") {
       let obj = value;
-      if (obj.id && obj.className == "Function") {
-        let stub = this.makeCallable(obj.id);
-        this.addRemoteObject(obj.id, stub);
-        return stub;
-      } else if (obj.id && obj.className) { // object description
+      if (obj.idLocal) {
+        let stub = this.getRemoteObject(obj.idLocal);
+        if (stub) {
+          return stub;
+        }
+        if (obj.className == "Function") {
+          let stub = this.makeCallable(obj.idLocal);
+          this.addRemoteObject(obj.idLocal, stub);
+          return stub;
+        }
         return this.makeStub(obj);
       } else if (obj.idRemote) {
         return this.getLocalObject(obj.idRemote);
-      } else if (obj.idLocal) {
-        return this.getRemoteObject(obj.idLocal);
       } else if (obj.plainObject) {
         let plainObject = {};
         for (let propName in obj.plainObject) {
@@ -257,7 +267,7 @@ export default class BaseProtocol {
       obj = classCtor(...args);
     }
 
-    return this.createObjectDescription(obj, this.getNewIDForLocalObject(obj));
+    return this.createObjectDescription(obj, this.getOrCreateIDForLocalObject(obj));
   }
 
   async callListener(payload) {
@@ -343,15 +353,9 @@ export default class BaseProtocol {
     } else if (Array.isArray(value)) {
       return Promise.all(value.map(el => this.mapOutgoingObjects(el)));
     } else if (typeof(value) == "function") {
-      let id = this.getExistingIDForLocalObject(value);
-      if (id) {
-        return { // Object reference for local object
-          idLocal: id,
-        };
-      }
-      id = this.getNewIDForLocalObject(value);
+      let id = this.getOrCreateIDForLocalObject(value);
       return {
-        id: id,
+        idLocal: this.getOrCreateIDForLocalObject(value),
         className: "Function",
       };
     } else if (typeof(value) == "object") {
@@ -372,14 +376,7 @@ export default class BaseProtocol {
         };
       }
 
-      let id = this.getExistingIDForLocalObject(obj);
-      if (id) {
-        return { // Object reference for local object
-          idLocal: id,
-        };
-      }
-
-      return await this.createObjectDescription(obj, this.getNewIDForLocalObject(obj));
+      return await this.createObjectDescription(obj, this.getOrCreateIDForLocalObject(obj));
     }
   }
 
@@ -422,7 +419,7 @@ export default class BaseProtocol {
     }
 
     return {
-      id: id,
+      idLocal: id,
       className: className,
       properties: props,
     };
@@ -488,17 +485,17 @@ export default class BaseProtocol {
   // ID to objects
 
   /**
-   * {Map ID {string} -> remoteObject {StubObject} }
+   * {Map ID {string} -> remoteObject {WeakRef<StubObject>} }
    */
   _remoteObjects = new Map();
   /**
-   * {Map ID {string} -> localObject {obj} }
+   * {Map ID {string} -> localObject {obj | WeakRef<obj>} }
    */
   _localIDsToObjects = new Map();
   /**
-   * {Map localObj {obj} -> ID {string} }
+   * {WeakMap localObj {obj} -> ID {string} }
    */
-  _localObjectsToIDs = new Map();
+  _localObjectsToIDs = new WeakMap();
 
   generateNewObjID() {
     let id;
@@ -510,12 +507,11 @@ export default class BaseProtocol {
 
   /**
    * @param id {string} ID of object refererence
-   * @returns {StubObj} remote object
+   * @returns {StubObj?} remote object
    */
   getRemoteObject(id) {
-    let obj = this._remoteObjects.get(id);
-    assert(obj, `Remote object with ID ${ id } is unknown here.`);
-    return obj;
+    let ref = this._remoteObjects.get(id);
+    return ref && ref.deref();
   }
 
   /**
@@ -525,6 +521,11 @@ export default class BaseProtocol {
   getLocalObject(id) {
     let obj = this._localIDsToObjects.get(id);
     assert(obj, `Local object with ID ${ id } is unknown here.`);
+    if (obj instanceof WeakRef) {
+      obj = obj.deref();
+      assert(obj, `Local object with ID ${ id } is unknown here.`);
+      this._localIDsToObjects.set(id, obj);
+    }
     return obj;
   }
 
@@ -532,18 +533,14 @@ export default class BaseProtocol {
    * @param obj {Object} Local object
    * @returns {string} ID
    */
-  getExistingIDForLocalObject(obj) {
-    return this._localObjectsToIDs.get(obj);
-  }
-
-  /**
-   * @param obj {Object} Local object
-   * @returns {string} ID
-   */
-  getNewIDForLocalObject(obj) {
-    let id = this.generateNewObjID();
+  getOrCreateIDForLocalObject(obj) {
+    let id = this._localObjectsToIDs.get(obj);
+    if (!id) {
+      id = this.generateNewObjID();
+      this._localObjectsToIDs.set(obj, id);
+      this._localObjectRegistry.register(obj, id);
+    }
     this._localIDsToObjects.set(id, obj);
-    this._localObjectsToIDs.set(obj, id);
     return id;
   }
 
@@ -552,21 +549,10 @@ export default class BaseProtocol {
    * @param obj {StubObj} Remote object
    */
   addRemoteObject(id, obj) {
-    let existing = this._remoteObjects.get(id);
+    let existing = this.getRemoteObject(id);
     assert( !existing, `Remote object ID ${ id } already exists.`);
-    this._remoteObjects.set(id, obj);
+    this._remoteObjects.set(id, new WeakRef(obj));
     this._remoteObjectRegistry.register(obj, id);
-  }
-
-  /**
-   * Remote side says that it no longer needs this object.
-   * Drop the reference to it.
-   * @param id {string} ID of object refererence
-   */
-  deleteRemoteObject(id) {
-    let obj = this._remoteObjects.get(id);
-    assert(obj, `Remote object with ID ${ id } is unknown here.`);
-    this._remoteObjects.delete(id);
   }
 
   /**
@@ -577,9 +563,14 @@ export default class BaseProtocol {
   deleteLocalObject(id) {
     let obj = this._localIDsToObjects.get(id);
     assert(obj, `Local object with ID ${ id } is unknown here.`);
-    this._localIDsToObjects.delete(id);
-    this._localObjectsToIDs.delete(obj);
+    if (obj instanceof WeakRef) {
+      return;
+    }
+    // Keep weak references in case the object gets promoted again
+    this._localIDsToObjects.set(id, new WeakRef(obj));
   }
+
+  _localObjectRegistry = null;
 
   _remoteObjectRegistry = null;
 }
