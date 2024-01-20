@@ -93,10 +93,7 @@ export default class MessageCall  {
       // The other side is calling a function here
       let func = this._functions[message.path];
       assert(func, "404 " + message.path + ": No such function registered");
-      let result = func(message.arg);
-      if (result instanceof Promise) {
-        result = await result;
-      }
+      let result = await func(message.arg);
       this.send({
         id: message.id,
         success: true,
@@ -149,22 +146,12 @@ export default class MessageCall  {
     delete this._callsWaiting[message.id];
     assert(callWaiting, "Got a response for call ID " + message.id + ", but we did not make such a call, or we already got the response for it");
     if (message.success) {
-      try {
-        callWaiting.resolve(message.result);
-      } catch (ex) {
-        console.error(ex); // TODO remove
-        callWaiting.reject(ex); // TODO can I call reject() after resolve()?
-      }
+      callWaiting.resolve(message.result);
     } else {
       let ex = new Error();
       ex.message = message.message;
       ex.code = message.code;
-      try {
-        callWaiting.reject(ex);
-      } catch (ex) {
-        console.error("Our error handling threw");
-        console.error(ex);
-      }
+      callWaiting.reject(ex);
     }
   }
 
