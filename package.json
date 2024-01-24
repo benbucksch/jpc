@@ -1,6 +1,6 @@
 {
   "name": "jpc-core",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Allows remote procedure calls between JS objects over event-like channels or the network",
   "dependencies": {},
   "devDependencies": {},
