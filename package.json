@@ -2,10 +2,6 @@
   "name": "jpc-core",
   "version": "0.2.2",
   "description": "Allows remote procedure calls between JS objects over event-like channels or the network",
-  "dependencies": {},
-  "devDependencies": {},
-  "scripts": {},
-  "type": "module",
   "keywords": [
     "rpc",
     "ipc",
@@ -13,6 +9,13 @@
     "corba",
     "electron"
   ],
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^1.1.0"
+  },
   "author": "Ben Bucksch",
   "license": "MIT",
   "repository": {

@@ -1,50 +1,9 @@
 import { assert } from "./util.js";
 
-/**
- * Called by the wire protocol implementation,
- * before calling any of the other functions.
- *
- * @param jpcProtocol {JPCProtocol} Wire protocol implementation
- */
-export function start(jpcProtocol, startObject) {
-  callRemote = (...args) => jpcProtocol.callRemote(...args);
-  jpcProtocol.registerIncomingCall("class", registerRemoteClass);
-  jpcProtocol.registerIncomingCall("start", async () => await mapOutgoingObjects(startObject));
-  jpcProtocol.registerIncomingCall("new", newObjListener);
-  jpcProtocol.registerIncomingCall("call", callListener);
-  jpcProtocol.registerIncomingCall("func", funcListener);
-  jpcProtocol.registerIncomingCall("get", getterListener);
-  jpcProtocol.registerIncomingCall("set", setterListener);
-  jpcProtocol.registerIncomingCall("del", payload => {
-    deleteLocalObject(payload.idRemote);
-  });
-  if (globalThis && "FinalizationRegistry" in globalThis) {
-    gRemoteObjectRegistry = new FinalizationRegistry(id => {
-      jpcProtocol.callRemote("del", {
-        idRemote: id,
-      }).catch(consoleError);
-    });
-    // TODO Free everything when client disconnects
-    // See <https://github.com/tc39/proposal-weakrefs/blob/master/reference.md#notes-on-cleanup-callbacks>
-    // and <https://github.com/tc39/proposal-weakrefs/issues/125>
-  } else { // not supported, use dummy
-    console.warn("FinalizationRegistry is not supported. This will leak everything. Please update node.js.");
-    gRemoteObjectRegistry = {
-      register: () => {},
-    };
-  }
+function getClassName(obj) {
+  let proto = Object.getPrototypeOf(obj);
+  return (proto && (proto[Symbol.toStringTag] || proto.constructor.name)) || "Object";
 }
-
-var callRemote;
-
-///////////////////////////////////////////
-// Stub object
-// A local JS object representing a remote object
-
-/**
- * { Map className {string} -> prototype object {obj} }
- */
-var gRemoteClasses = new Map();
 
 class RemoteClass {
   constructor(className) {
@@ -52,476 +11,567 @@ class RemoteClass {
   }
 }
 
-/**
- * Generates a stub class
- *
- * @param classDescrJSON {JSON} Describes the remote class, see PROTOCOL.md
- */
-function registerRemoteClass(classDescrJSON) {
-  if (Array.isArray(classDescrJSON)) {
-    for (let descr of classDescrJSON) {
-      registerRemoteClass(descr);
-    }
-    return;
+export default class BaseProtocol {
+  callRemote(method, payload) {
+    throw new Error("Implement this");
   }
-
-  let existing = gRemoteClasses.get(classDescrJSON.className);
-  if (existing) {
-    return existing;
+  registerIncomingCall(method, listener) {
+    throw new Error("Implement this");
   }
-
-  let parent;
-  if (classDescrJSON.extends) {
-    parent = gRemoteClasses.get(classDescrJSON.extends);
-    assert(parent, `Super class ${ classDescrJSON.extends } is unknown here. Make sure to first push the super class description before the subclass description.`);
-  }
-
-  let proto;
-  if (parent) {
-    proto = Object.create(parent);
-    proto.className = classDescrJSON.className;
-  } else {
-    proto = new RemoteClass(classDescrJSON.className);
-  }
-  for (let func of classDescrJSON.functions) {
-    proto[func.name] = makeFunction(func.name);
-  }
-  for (let getter of classDescrJSON.getters) {
-    Object.defineProperty(proto, getter.name, {
-      enumerable: true,
-      get: makeGetter(getter.name),
+  /**
+   * Called by the wire protocol implementation,
+   * before calling any of the other functions.
+   *
+   * @param jpcProtocol {JPCProtocol} Wire protocol implementation
+   */
+  start(startObject) {
+    this.registerIncomingCall("class", this.registerRemoteClass.bind(this));
+    this.registerIncomingCall("start", this.mapOutgoingObjects.bind(this, startObject));
+    this.registerIncomingCall("new", this.newObjListener.bind(this));
+    this.registerIncomingCall("call", this.callListener.bind(this));
+    this.registerIncomingCall("iter", this.iterListener.bind(this));
+    this.registerIncomingCall("func", this.funcListener.bind(this));
+    this.registerIncomingCall("get", this.getterListener.bind(this));
+    this.registerIncomingCall("set", this.setterListener.bind(this));
+    this.registerIncomingCall("del", payload => {
+      this.deleteLocalObject(payload.idRemote);
     });
-    if (getter.hasSetter) {
-      let setterName = "set" + getter.name[0].toUpperCase() + getter.name.substr(1);
-      proto[setterName] = makeSetter(getter.name);
-    }
-  }
-  proto.newRemote = makeNewObj(classDescrJSON.className); // TODO static function
-  gRemoteClasses.set(classDescrJSON.className, proto);
-}
-
-/**
- * Generates a stub object instance
- *
- * @param objDescrJSON {JSON} Describes the remote object, see PROTOCOL.md
- * @returns {StubObj}
- */
-function makeStub(objDescrJSON) {
-  let proto = gRemoteClasses.get(objDescrJSON.className);
-  assert(proto, `Remote class ${ objDescrJSON.className } is unknown here. Make sure to first push the class description.`);
-  let stub = Object.create(proto);
-  stub.id = objDescrJSON.id;
-  addRemoteObject(objDescrJSON.id, stub);
-  for (let propName in objDescrJSON.properties) {
-    stub[propName] = mapIncomingObjects(objDescrJSON.properties[propName]);
-  }
-  return stub;
-}
-
-function makeCallable(id) {
-  return async function(...args) {
-    return mapIncomingObjects(await callRemote("call", {
-      obj: id,
-      args: await mapOutgoingObjects(args),
-    }));
-  }
-}
-
-function makeFunction(functionName) {
-  return async function(...args) {
-    // this == stub object
-    return mapIncomingObjects(await callRemote("func", {
-      obj: this.id,
-      name: functionName,
-      args: await mapOutgoingObjects(args),
-    }));
-  }
-}
-
-function makeGetter(propName) {
-  // this == stub object
-  return async function() {
-    // this == stub object
-    return mapIncomingObjects(await callRemote("get", {
-      obj: this.id,
-      name: propName,
-    }));
-  }
-}
-
-function makeSetter(propName) {
-  return async function(val) {
-    // this == stub object
-    return callRemote("set", {
-      obj: this.id,
-      name: propName,
-      value: await mapOutgoingObjects(val),
-    });
-  }
-}
-
-function makeNewObj(className) {
-  return async function(...args) {
-    // this == stub object
-    return mapIncomingObjects(await callRemote("new", {
-      className: className,
-      args: await mapOutgoingObjects(args),
-    }));
-  }
-}
-
-/**
- * @param value {any} string, number, boolean,
- *   array, JSON obj,
- *   Object description or Object references, as defined by PROTOCOL.md
- * @return {any} same as value, just Object descriptions and Object references
- *   replaced with `StubObject`s.
- */
-export function mapIncomingObjects(value) {
-  if (typeof(value) == "string" ||
-      typeof(value) == "number" ||
-      typeof(value) == "boolean" ||
-      value == null) {
-    return value;
-  } else if (Array.isArray(value)) {
-    return value.map(mapIncomingObjects);
-  } else if (typeof(value) == "object") {
-    let obj = value;
-    if (obj.id && obj.className == "Function") {
-      let stub = makeCallable(obj.id);
-      addRemoteObject(obj.id, stub);
-      return stub;
-    } else if (obj.id && obj.className) { // object description
-      return makeStub(obj);
-    } else if (obj.idRemote) {
-      return getLocalObject(obj.idRemote);
-    } else if (obj.idLocal) {
-      return getRemoteObject(obj.idLocal);
-    } else if (obj.json) {
-      let json = {};
-      for (let propName in obj.json) {
-        json[propName] = mapIncomingObjects(obj.json[propName]);
-      }
-      return json;
-    }
-  }
-}
-
-
-///////////////////////////////////////////
-// Local object
-// Passing a normal local JS object to the remote side
-
-async function newObjListener(payload) {
-  assert(typeof(payload.className) == "string", "Need class name");
-  let classCtor = global[payload.className];
-  let obj;
-  let args = payload.args;
-  if (typeof(args) == "undefined") {
-    obj = classCtor();
-  } else {
-    assert(Array.isArray(args), "Constructor arguments must be an array of values");
-    args = mapIncomingObjects(args);
-    obj = classCtor(...args);
-  }
-
-  return createObjectDescription(obj, getNewIDForLocalObject(obj));
-}
-
-async function callListener(payload) {
-  assert(typeof(payload.obj) == "number", "Need object ID");
-  let obj = getLocalObject(payload.obj);
-  let args = mapIncomingObjects(payload.args);
-
-  // may throw
-  let result = obj(...args);
-
-  return await mapOutgoingObjects(await result);
-}
-
-async function funcListener(payload) {
-  let name = payload.name;
-  assert(typeof(name) == "string", "Need function name");
-  assert(typeof(payload.obj) == "string", "Need object ID");
-  let obj = getLocalObject(payload.obj);
-  let args = mapIncomingObjects(payload.args);
-
-  // may throw
-  let result = obj[name](...args);
-
-  return await mapOutgoingObjects(await result);
-}
-
-async function getterListener(payload) {
-  let name = payload.name;
-  assert(typeof(name) == "string", "Need property getter name");
-  assert(typeof(payload.obj) == "string", "Need object ID");
-  let obj = getLocalObject(payload.obj);
-
-  // may throw
-  let value = obj[name];
-
-  return await mapOutgoingObjects(value);
-}
-
-async function setterListener(payload) {
-  let name = payload.name;
-  assert(typeof(name) == "string", "Need property setter name");
-  assert(typeof(payload.obj) == "string", "Need object ID");
-  let obj = getLocalObject(payload.obj);
-  let value = mapIncomingObjects(payload.value);
-
-  // may throw
-  obj[payload.name] = value;
-}
-
-/**
- * @param value {any} string, number, boolean,
- *   array, JSON obj, or
- *   local JS object
- * @return {any} same as value, just local objects replaced with
- *   Object descriptions and Object references, as defined by PROTOCOL.md
- */
-async function mapOutgoingObjects(value) {
-  if (typeof(value) == "string" ||
-      typeof(value) == "number" ||
-      typeof(value) == "boolean" ||
-      value == null) {
-    return value;
-  } else if (Array.isArray(value)) {
-    return Promise.all(value.map(mapOutgoingObjects));
-  } else if (typeof(value) == "function") {
-    let id = getExistingIDForLocalObject(value);
-    if (id) {
-      return { // Object reference for local object
-        idLocal: id,
+    if (globalThis && "FinalizationRegistry" in globalThis) {
+      this._remoteObjectRegistry = new FinalizationRegistry(id => {
+        this.callRemote("del", {
+          idRemote: id,
+        }).catch(console.error);
+      });
+      // TODO Free everything when client disconnects
+      // See <https://github.com/tc39/proposal-weakrefs/blob/master/reference.md#notes-on-cleanup-callbacks>
+      // and <https://github.com/tc39/proposal-weakrefs/issues/125>
+    } else { // not supported, use dummy
+      console.warn("FinalizationRegistry is not supported. This will leak everything. Please update node.js.");
+      this._remoteObjectRegistry = {
+        register: () => {},
       };
     }
-    id = getNewIDForLocalObject(value);
+  }
+
+  ///////////////////////////////////////////
+  // Stub object
+  // A local JS object representing a remote object
+
+  /**
+   * { Map className {string} -> prototype object {obj} }
+   */
+  _remoteClasses = new Map();
+
+  /**
+   * Generates a stub class
+   *
+   * @param classDescrJSON {JSON} Describes the remote class, see PROTOCOL.md
+   */
+  registerRemoteClass(classDescrJSON) {
+    if (Array.isArray(classDescrJSON)) {
+      for (let descr of classDescrJSON) {
+        this.registerRemoteClass(descr);
+      }
+      return;
+    }
+
+    let existing = this._remoteClasses.get(classDescrJSON.className);
+    if (existing) {
+      return existing;
+    }
+
+    let parent;
+    if (classDescrJSON.extends) {
+      parent = this._remoteClasses.get(classDescrJSON.extends);
+      assert(parent, `Super class ${ classDescrJSON.extends } is unknown here. Make sure to first push the super class description before the subclass description.`);
+    }
+
+    let proto;
+    if (parent) {
+      proto = Object.create(parent);
+      proto.className = classDescrJSON.className;
+    } else {
+      proto = new RemoteClass(classDescrJSON.className);
+    }
+    if (classDescrJSON.iterator) {
+      proto[Symbol.asyncIterator] = this.makeIterator(classDescrJSON.iterator);
+    }
+    for (let func of classDescrJSON.functions) {
+      proto[func.name] = this.makeFunction(func.name);
+    }
+    for (let getter of classDescrJSON.getters) {
+      Object.defineProperty(proto, getter.name, {
+        enumerable: true,
+        get: this.makeGetter(getter.name),
+      });
+      if (getter.hasSetter) {
+        let setterName = "set" + getter.name[0].toUpperCase() + getter.name.substr(1);
+        proto[setterName] = this.makeSetter(getter.name);
+      }
+    }
+    proto.newRemote = this.makeNewObj(classDescrJSON.className); // TODO static function
+    this._remoteClasses.set(classDescrJSON.className, proto);
+  }
+
+  /**
+   * Generates a stub object instance
+   *
+   * @param objDescrJSON {JSON} Describes the remote object, see PROTOCOL.md
+   * @returns {StubObj}
+   */
+  makeStub(objDescrJSON) {
+    let proto = this._remoteClasses.get(objDescrJSON.className);
+    assert(proto, `Remote class ${ objDescrJSON.className } is unknown here. Make sure to first push the class description.`);
+    let stub = Object.create(proto);
+    stub.id = objDescrJSON.id;
+    this.addRemoteObject(objDescrJSON.id, stub);
+    for (let propName in objDescrJSON.properties) {
+      stub[propName] = this.mapIncomingObjects(objDescrJSON.properties[propName]);
+    }
+    return stub;
+  }
+
+  makeCallable(id) {
+    return async (...args) => {
+      return this.mapIncomingObjects(await this.callRemote("call", {
+        obj: id,
+        args: await this.mapOutgoingObjects(args),
+      }));
+    }
+  }
+
+  makeIterator(symbolName) {
+    let self = this;
+    return async function*() {
+      let remote = self.mapIncomingObjects(await self.callRemote("iter", {
+        obj: this.id,
+        symbol: symbolName,
+      }));
+      // This object will probably be an iterable iterator,
+      // but we don't want to remote that call.
+      Object.getPrototypeOf(remote)[Symbol.asyncIterator] = function() { return this; };
+      for await (let value of remote) {
+        yield value;
+      }
+    }
+  }
+
+  makeFunction(functionName) {
+    let self = this;
+    return async function(...args) {
+      // this == stub object
+      return self.mapIncomingObjects(await self.callRemote("func", {
+        obj: this.id,
+        name: functionName,
+        args: await self.mapOutgoingObjects(args),
+      }));
+    }
+  }
+
+  makeGetter(propName) {
+    let self = this;
+    return async function() {
+      // this == stub object
+      return self.mapIncomingObjects(await self.callRemote("get", {
+        obj: this.id,
+        name: propName,
+      }));
+    }
+  }
+
+  makeSetter(propName) {
+    let self = this;
+    return async function(val) {
+      // this == stub object
+      return self.callRemote("set", {
+        obj: this.id,
+        name: propName,
+        value: await self.mapOutgoingObjects(val),
+      });
+    }
+  }
+
+  makeNewObj(className) {
+    let self = this;
+    return async function(...args) {
+      // this == stub object
+      return self.mapIncomingObjects(await self.callRemote("new", {
+        className: className,
+        args: await self.mapOutgoingObjects(args),
+      }));
+    }
+  }
+
+  /**
+   * @param value {any} string, number, boolean,
+   *   array, JSON obj,
+   *   Object description or Object references, as defined by PROTOCOL.md
+   * @return {any} same as value, just Object descriptions and Object references
+   *   replaced with `StubObject`s.
+   */
+  mapIncomingObjects(value) {
+    if (typeof(value) == "string" ||
+        typeof(value) == "number" ||
+        typeof(value) == "boolean" ||
+        value == null) {
+      return value;
+    } else if (Array.isArray(value)) {
+      return value.map(el => this.mapIncomingObjects(el));
+    } else if (typeof(value) == "object") {
+      let obj = value;
+      if (obj.id && obj.className == "Function") {
+        let stub = this.makeCallable(obj.id);
+        this.addRemoteObject(obj.id, stub);
+        return stub;
+      } else if (obj.id && obj.className) { // object description
+        return this.makeStub(obj);
+      } else if (obj.idRemote) {
+        return this.getLocalObject(obj.idRemote);
+      } else if (obj.idLocal) {
+        return this.getRemoteObject(obj.idLocal);
+      } else if (obj.json) {
+        let json = {};
+        for (let propName in obj.json) {
+          json[propName] = this.mapIncomingObjects(obj.json[propName]);
+        }
+        return json;
+      }
+    }
+  }
+
+
+  ///////////////////////////////////////////
+  // Local object
+  // Passing a normal local JS object to the remote side
+
+  async newObjListener(payload) {
+    assert(typeof(payload.className) == "string", "Need class name");
+    let classCtor = global[payload.className];
+    let obj;
+    let args = payload.args;
+    if (typeof(args) == "undefined") {
+      obj = classCtor();
+    } else {
+      assert(Array.isArray(args), "Constructor arguments must be an array of values");
+      args = this.mapIncomingObjects(args);
+      obj = classCtor(...args);
+    }
+
+    return this.createObjectDescription(obj, this.getNewIDForLocalObject(obj));
+  }
+
+  async callListener(payload) {
+    assert(typeof(payload.obj) == "number", "Need object ID");
+    let obj = this.getLocalObject(payload.obj);
+    let args = this.mapIncomingObjects(payload.args);
+
+    // may throw
+    let result = obj(...args);
+
+    return await this.mapOutgoingObjects(await result);
+  }
+
+  async iterListener(payload) {
+    let symbol = payload.symbol;
+    assert(typeof(symbol) == "string", "Need symbol name");
+    assert(typeof(payload.obj) == "number", "Need object ID");
+    let obj = this.getLocalObject(payload.obj);
+
+    // may throw
+    let result = obj[Symbol[symbol]]();
+
+    return await this.mapOutgoingObjects(result);
+  }
+
+  async funcListener(payload) {
+    let name = payload.name;
+    assert(typeof(name) == "string", "Need function name");
+    assert(typeof(payload.obj) == "string", "Need object ID");
+    let obj = this.getLocalObject(payload.obj);
+    let args = this.mapIncomingObjects(payload.args);
+
+    // may throw
+    let result = obj[name](...args);
+
+    return await this.mapOutgoingObjects(await result);
+  }
+
+  async getterListener(payload) {
+    let name = payload.name;
+    assert(typeof(name) == "string", "Need property getter name");
+    assert(typeof(payload.obj) == "string", "Need object ID");
+    let obj = this.getLocalObject(payload.obj);
+
+    // may throw
+    let value = obj[name];
+
+    return await this.mapOutgoingObjects(value);
+  }
+
+  async setterListener(payload) {
+    let name = payload.name;
+    assert(typeof(name) == "string", "Need property setter name");
+    assert(typeof(payload.obj) == "string", "Need object ID");
+    let obj = this.getLocalObject(payload.obj);
+    let value = this.mapIncomingObjects(payload.value);
+
+    // may throw
+    obj[payload.name] = value;
+  }
+
+  /**
+   * @param value {any} string, number, boolean,
+   *   array, JSON obj, or
+   *   local JS object
+   * @return {any} same as value, just local objects replaced with
+   *   Object descriptions and Object references, as defined by PROTOCOL.md
+   */
+  async mapOutgoingObjects(value) {
+    if (typeof(value) == "string" ||
+        typeof(value) == "number" ||
+        typeof(value) == "boolean" ||
+        value == null) {
+      return value;
+    } else if (Array.isArray(value)) {
+      return Promise.all(value.map(el => this.mapOutgoingObjects(el)));
+    } else if (typeof(value) == "function") {
+      let id = this.getExistingIDForLocalObject(value);
+      if (id) {
+        return { // Object reference for local object
+          idLocal: id,
+        };
+      }
+      id = this.getNewIDForLocalObject(value);
+      return {
+        id: id,
+        className: "Function",
+      };
+    } else if (typeof(value) == "object") {
+      let obj = value;
+      if (obj instanceof RemoteClass) { // TODO check working?
+        return { // Object reference for remote object
+          idRemote: obj.id,
+        };
+      }
+
+      if (getClassName(obj) == "Object") { // JSON object -- TODO better way to check?
+        let json = {};
+        for (let propName in obj) {
+          json[propName] = await this.mapOutgoingObjects(obj[propName]);
+        }
+        return {
+          json: json,
+        };
+      }
+
+      let id = this.getExistingIDForLocalObject(obj);
+      if (id) {
+        return { // Object reference for local object
+          idLocal: id,
+        };
+      }
+
+      return await this.createObjectDescription(obj, this.getNewIDForLocalObject(obj));
+    }
+  }
+
+
+  /**
+   * Contains local class descriptions that were already sent to the remote end.
+   * { Set className {string} }
+   */
+  _localClasses = new Set();
+
+  /**
+   * Return an object instance to the remote party that they did not see yet.
+   *
+   * Sends the class description as needed.
+   *
+   * @param obj {Object} local object
+   * @returns {JSON} Object description, see PROTOCOL.md
+   */
+  async createObjectDescription(obj, id) {
+    let className = getClassName(obj);
+    assert(className, "Could not find class name for local object");
+    if ( !this._localClasses.has(className)) {
+      await this.sendClassDescription(className, obj);
+    }
+
+    let props = null;
+    for (let propName of Object.getOwnPropertyNames(obj)) {
+      if (propName.startsWith("_")) {
+        continue;
+      }
+      let property = Object.getOwnPropertyDescriptor(obj, propName);
+      if (property.get ||
+          typeof(property.value) == "function") {
+        continue;
+      }
+      if ( !props) {
+        props = {};
+      }
+      props[propName] = await this.mapOutgoingObjects(obj[propName]);
+    }
+
     return {
       id: id,
-      className: "Function",
+      className: className,
+      properties: props,
     };
-  } else if (typeof(value) == "object") {
-    let obj = value;
-    if (obj instanceof RemoteClass) { // TODO check working?
-      return { // Object reference for remote object
-        idRemote: obj.id,
-      };
+  }
+
+  async sendClassDescription(className, instance) {
+    if (this._localClasses.has(className)) {
+      return;
+    }
+    this._localClasses.add(className);
+
+    let proto;
+    if (instance) {
+      proto = Object.getPrototypeOf(instance);
     }
 
-    if (obj.constructor.name == "Object") { // JSON object -- TODO better way to check?
-      let json = {};
-      for (let propName in obj) {
-        json[propName] = await mapOutgoingObjects(obj[propName]);
+    let descr = {
+      className: className,
+      iterator: null,
+      functions: [],
+      getters: [],
+      properties: [],
+    };
+
+    if (getClassName(proto) != "Object") {
+      descr.extends = getClassName(proto);
+      await this.sendClassDescription(descr.extends, proto);
+    }
+
+    if (Symbol.asyncInterator in proto) {
+      descr.iterator = "asyncIterator";
+    } else if (Symbol.iterator in proto) {
+      descr.iterator = "iterator";
+    }
+    for (let propName of Object.getOwnPropertyNames(proto)) {
+      if (propName.startsWith("_") || propName == "constructor") {
+        continue;
       }
-      return {
-        json: json,
-      };
-    }
-
-    let id = getExistingIDForLocalObject(obj);
-    if (id) {
-      return { // Object reference for local object
-        idLocal: id,
-      };
-    }
-
-    return await createObjectDescription(obj, getNewIDForLocalObject(obj));
-  }
-}
-
-
-/**
- * Contains local class descriptions that were already sent to the remote end.
- * { Set className {string} }
- */
-var gLocalClasses = new Set();
-
-/**
- * Return an object instance to the remote party that they did not see yet.
- *
- * Sends the class description as needed.
- *
- * @param obj {Object} local object
- * @returns {JSON} Object description, see PROTOCOL.md
- */
-async function createObjectDescription(obj, id) {
-  let className = obj.constructor.name;
-  assert(className, "Could not find class name for local object");
-  if ( !gLocalClasses.has(className)) {
-    await sendClassDescription(className, obj);
-  }
-
-  let props = null;
-  for (let propName of Object.getOwnPropertyNames(obj)) {
-    if (propName.startsWith("_")) {
-      continue;
-    }
-    let property = Object.getOwnPropertyDescriptor(obj, propName);
-    if (property.get ||
-        typeof(property.value) == "function") {
-      continue;
-    }
-    if ( !props) {
-      props = {};
-    }
-    props[propName] = await mapOutgoingObjects(property.value);
-  }
-
-  return {
-    id: id,
-    className: className,
-    properties: props,
-  };
-}
-
-async function sendClassDescription(className, instance) {
-  if (gLocalClasses.has(className)) {
-    return;
-  }
-  gLocalClasses.add(className);
-
-  let proto;
-  if (instance) {
-    proto = Object.getPrototypeOf(instance);
-  }
-
-  let descr = {
-    className: className,
-    functions: [],
-    getters: [],
-    properties: [],
-  };
-
-  let parentClass = Object.getPrototypeOf(proto);
-  if (parentClass && parentClass.constructor.name != "Object") {
-    descr.extends = parentClass.constructor.name;
-    await sendClassDescription(descr.extends, proto);
-  }
-
-  for (let propName of Object.getOwnPropertyNames(proto)) {
-    if (propName.startsWith("_") || propName == "constructor") {
-      continue;
-    }
-    let property = Object.getOwnPropertyDescriptor(proto, propName);
-    if (typeof(property.value) == "function") {
-      descr.functions.push({
+      let property = Object.getOwnPropertyDescriptor(proto, propName);
+      if (typeof(property.value) == "function") {
+        descr.functions.push({
+          name: propName,
+        });
+        continue;
+      }
+      if (typeof(property.get) == "function") {
+        descr.getters.push({
+          name: propName,
+          hasSetter: typeof(property.set) == "function",
+        });
+        continue;
+      }
+      descr.properties.push({
         name: propName,
       });
-      continue;
     }
-    if (typeof(property.get) == "function") {
-      descr.getters.push({
-        name: propName,
-        hasSetter: typeof(property.set) == "function",
-      });
-      continue;
-    }
-    descr.properties.push({
-      name: propName,
-    });
+
+    await this.callRemote("class", [ descr ]);
   }
 
-  await callRemote("class", [ descr ]);
+
+  ///////////////////////////////////////////////
+  // ID to objects
+
+  /**
+   * {Map ID {string} -> remoteObject {StubObject} }
+   */
+  _remoteObjects = new Map();
+  /**
+   * {Map ID {string} -> localObject {obj} }
+   */
+  _localIDsToObjects = new Map();
+  /**
+   * {Map localObj {obj} -> ID {string} }
+   */
+  _localObjectsToIDs = new Map();
+
+  generateNewObjID() {
+    let id;
+    do {
+      id = (Math.random() * 1e20).toFixed();
+    } while (this._localIDsToObjects.has(id));
+    return id;
+  }
+
+  /**
+   * @param id {string} ID of object refererence
+   * @returns {StubObj} remote object
+   */
+  getRemoteObject(id) {
+    let obj = this._remoteObjects.get(id);
+    assert(obj, `Remote object with ID ${ id } is unknown here.`);
+    return obj;
+  }
+
+  /**
+   * @param id {string} ID of object refererence
+   * @returns {obj} local object
+   */
+  getLocalObject(id) {
+    let obj = this._localIDsToObjects.get(id);
+    assert(obj, `Local object with ID ${ id } is unknown here.`);
+    return obj;
+  }
+
+  /**
+   * @param obj {Object} Local object
+   * @returns {string} ID
+   */
+  getExistingIDForLocalObject(obj) {
+    return this._localObjectsToIDs.get(obj);
+  }
+
+  /**
+   * @param obj {Object} Local object
+   * @returns {string} ID
+   */
+  getNewIDForLocalObject(obj) {
+    let id = this.generateNewObjID();
+    this._localIDsToObjects.set(id, obj);
+    this._localObjectsToIDs.set(obj, id);
+    return id;
+  }
+
+  /**
+   * @param id {string} ID for remote object, as set by the remote side
+   * @param obj {StubObj} Remote object
+   */
+  addRemoteObject(id, obj) {
+    let existing = this._remoteObjects.get(id);
+    assert( !existing, `Remote object ID ${ id } already exists.`);
+    this._remoteObjects.set(id, obj);
+    this._remoteObjectRegistry.register(obj, id);
+  }
+
+  /**
+   * Remote side says that it no longer needs this object.
+   * Drop the reference to it.
+   * @param id {string} ID of object refererence
+   */
+  deleteRemoteObject(id) {
+    let obj = this._remoteObjects.get(id);
+    assert(obj, `Remote object with ID ${ id } is unknown here.`);
+    this._remoteObjects.delete(id);
+  }
+
+  /**
+   * Remote side says that it no longer needs this object.
+   * Drop the reference to it.
+   * @param id {string} ID of object refererence
+   */
+  deleteLocalObject(id) {
+    let obj = this._localIDsToObjects.get(id);
+    assert(obj, `Local object with ID ${ id } is unknown here.`);
+    this._localIDsToObjects.delete(id);
+    this._localObjectsToIDs.delete(obj);
+  }
+
+  _remoteObjectRegistry = null;
 }
-
-
-///////////////////////////////////////////////
-// ID to objects
-
-/**
- * {Map ID {string} -> remoteObject {StubObject} }
- */
-var gRemoteObjects = new Map();
-/**
- * {Map ID {string} -> localObject {obj} }
- */
-var gLocalIDsToObjects = new Map();
-/**
- * {Map localObj {obj} -> ID {string} }
- */
-var gLocalObjectsToIDs = new Map();
-
-function generateNewObjID() {
-  let id;
-  do {
-    id = (Math.random() * 1e20).toFixed();
-  } while (gLocalIDsToObjects.has(id));
-  return id;
-}
-
-/**
- * @param id {string} ID of object refererence
- * @returns {StubObj} remote object
- */
-function getRemoteObject(id) {
-  let obj = gRemoteObjects.get(id);
-  assert(obj, `Remote object with ID ${ id } is unknown here.`);
-  return obj;
-}
-
-/**
- * @param id {string} ID of object refererence
- * @returns {obj} local object
- */
-function getLocalObject(id) {
-  let obj = gLocalIDsToObjects.get(id);
-  assert(obj, `Local object with ID ${ id } is unknown here.`);
-  return obj;
-}
-
-/**
- * @param obj {Object} Local object
- * @returns {string} ID
- */
-function getExistingIDForLocalObject(obj) {
-  return gLocalObjectsToIDs.get(obj);
-}
-
-/**
- * @param obj {Object} Local object
- * @returns {string} ID
- */
-function getNewIDForLocalObject(obj) {
-  let id = generateNewObjID();
-  gLocalIDsToObjects.set(id, obj);
-  gLocalObjectsToIDs.set(obj, id);
-  return id;
-}
-
-/**
- * @param id {string} ID for remote object, as set by the remote side
- * @param obj {StubObj} Remote object
- */
-function addRemoteObject(id, obj) {
-  let existing = gRemoteObjects.get(id);
-  assert( !existing, `Remote object ID ${ id } already exists.`);
-  gRemoteObjects.set(id, obj);
-  gRemoteObjectRegistry.register(obj, id);
-}
-
-/**
- * Remote side says that it no longer needs this object.
- * Drop the reference to it.
- * @param id {string} ID of object refererence
- */
-function deleteRemoteObject(id) {
-  let obj = gRemoteObjects.get(id);
-  assert(obj, `Remote object with ID ${ id } is unknown here.`);
-  gRemoteObjects.delete(id);
-}
-
-/**
- * Remote side says that it no longer needs this object.
- * Drop the reference to it.
- * @param id {string} ID of object refererence
- */
-function deleteLocalObject(id) {
-  let obj = gLocalIDsToObjects.get(id);
-  assert(obj, `Local object with ID ${ id } is unknown here.`);
-  gLocalIDsToObjects.delete(id);
-  gLocalObjectsToIDs.delete(obj);
-}
-
-var gRemoteObjectRegistry;
