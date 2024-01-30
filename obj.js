@@ -229,12 +229,12 @@ export default class BaseProtocol {
         return this.getLocalObject(obj.idRemote);
       } else if (obj.idLocal) {
         return this.getRemoteObject(obj.idLocal);
-      } else if (obj.json) {
-        let json = {};
-        for (let propName in obj.json) {
-          json[propName] = this.mapIncomingObjects(obj.json[propName]);
+      } else if (obj.plainObject) {
+        let plainObject = {};
+        for (let propName in obj.plainObject) {
+          plainObject[propName] = this.mapIncomingObjects(obj.plainObject[propName]);
         }
-        return json;
+        return plainObject;
       }
     }
   }
@@ -261,20 +261,24 @@ export default class BaseProtocol {
   }
 
   async callListener(payload) {
-    assert(typeof(payload.obj) == "number", "Need object ID");
-    let obj = this.getLocalObject(payload.obj);
+    assert(typeof(payload.obj) == "string", "Need object ID");
+    let func = this.getLocalObject(payload.obj);
     let args = this.mapIncomingObjects(payload.args);
 
     // may throw
-    let result = obj(...args);
+    let result = func(...args);
 
-    return await this.mapOutgoingObjects(await result);
+    if (result instanceof Promise) {
+      result = await result;
+    }
+
+    return await this.mapOutgoingObjects(result);
   }
 
   async iterListener(payload) {
     let symbol = payload.symbol;
     assert(typeof(symbol) == "string", "Need symbol name");
-    assert(typeof(payload.obj) == "number", "Need object ID");
+    assert(typeof(payload.obj) == "string", "Need object ID");
     let obj = this.getLocalObject(payload.obj);
 
     // may throw
@@ -293,7 +297,11 @@ export default class BaseProtocol {
     // may throw
     let result = obj[name](...args);
 
-    return await this.mapOutgoingObjects(await result);
+    if (result instanceof Promise) {
+      result = await result;
+    }
+
+    return await this.mapOutgoingObjects(result);
   }
 
   async getterListener(payload) {
@@ -355,12 +363,12 @@ export default class BaseProtocol {
       }
 
       if (getClassName(obj) == "Object") { // JSON object -- TODO better way to check?
-        let json = {};
+        let plainObject = {};
         for (let propName in obj) {
-          json[propName] = await this.mapOutgoingObjects(obj[propName]);
+          plainObject[propName] = await this.mapOutgoingObjects(obj[propName]);
         }
         return {
-          json: json,
+          plainObject: plainObject,
         };
       }
 
