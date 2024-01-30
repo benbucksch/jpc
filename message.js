@@ -1,4 +1,4 @@
-import { assert } from "./util.js";
+import { assert, consoleError } from "./util.js";
 
 /**
  * Abstract base implementation for protocols.
