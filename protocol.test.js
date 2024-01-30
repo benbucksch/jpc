@@ -58,7 +58,7 @@ class Collection {
 }
 
 test('Protocol', async () => {
-  let server = new LPCProtocol({ success: true, callable: function(arg) { return !arg; }, collection: new Collection() });
+  let server = new LPCProtocol({ success: true, callable: function(arg) { return !arg; }, makeCollection: function() { return new Collection(); } });
   let client = new LPCProtocol();
   server.init();
   client.init();
@@ -69,8 +69,8 @@ test('Protocol', async () => {
   expect(start).toHaveProperty("callable");
   await expect(start.callable(false)).resolves.toBe(true);
   await expect(start.callable(true)).resolves.toBe(false);
-  expect(start).toHaveProperty("collection");
-  let collection = start.collection;
+  expect(start).toHaveProperty("makeCollection");
+  let collection = await start.makeCollection();
   await expect(collection.isEmpty).resolves.toBe(true);
   await collection.add(0);
   await collection.add("");
@@ -86,4 +86,22 @@ test('Protocol', async () => {
   await expect(collection.remove(0)).resolves.toBe(false);
   await collection.clear();
   await expect(collection.isEmpty).resolves.toBe(true);
+  if (globalThis.gc) {
+    expect(client._remoteObjects.size).toBe(3);
+    expect(server._localIDsToObjects.size).toBe(3);
+    collection = null;
+    start = null;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    globalThis.gc();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    globalThis.gc();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(client._remoteObjects.size).toBe(0);
+    expect(server._localIDsToObjects.size).toBe(2);
+    for (let [id, obj] of server._localIDsToObjects) {
+      expect(obj).toBeInstanceOf(WeakRef);
+    }
+  } else {
+    console.warn("Unable to run gc tests");
+  }
 });
