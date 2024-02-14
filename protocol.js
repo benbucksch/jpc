@@ -22,7 +22,7 @@ export default class JPCProtocol extends BaseProtocol {
   }
 
   async getRemoteStartObject() {
-    return this.mapIncomingObjects(await this.callRemote("start"));
+    return await this.mapIncomingObjects(await this.callRemote("start"));
   }
 
   /**
