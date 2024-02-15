@@ -25,7 +25,7 @@ export default class BaseProtocol {
    * @param jpcProtocol {JPCProtocol} Wire protocol implementation
    */
   start(startObject) {
-    this.registerIncomingCall("class", this.registerRemoteClass.bind(this));
+    this.registerIncomingCall("class", this.getClassDescription.bind(this));
     this.registerIncomingCall("start", this.mapOutgoingObjects.bind(this, startObject));
     this.registerIncomingCall("new", this.newObjListener.bind(this));
     this.registerIncomingCall("call", this.callListener.bind(this));
@@ -73,24 +73,12 @@ export default class BaseProtocol {
    * Generates a stub class
    *
    * @param classDescrJSON {JSON} Describes the remote class, see PROTOCOL.md
+   * @param parent {RemoteClass?} The class this class inherits from
    */
-  registerRemoteClass(classDescrJSON) {
-    if (Array.isArray(classDescrJSON)) {
-      for (let descr of classDescrJSON) {
-        this.registerRemoteClass(descr);
-      }
-      return;
-    }
-
+  registerRemoteClass(classDescrJSON, parent) {
     let existing = this._remoteClasses.get(classDescrJSON.className);
     if (existing) {
       return existing;
-    }
-
-    let parent;
-    if (classDescrJSON.extends) {
-      parent = this._remoteClasses.get(classDescrJSON.extends);
-      assert(parent, `Super class ${ classDescrJSON.extends } is unknown here. Make sure to first push the super class description before the subclass description.`);
     }
 
     let proto;
@@ -118,6 +106,7 @@ export default class BaseProtocol {
     }
     proto.newRemote = this.makeNewObj(classDescrJSON.className); // TODO static function
     this._remoteClasses.set(classDescrJSON.className, proto);
+    return proto;
   }
 
   /**
@@ -126,23 +115,31 @@ export default class BaseProtocol {
    * @param objDescrJSON {JSON} Describes the remote object, see PROTOCOL.md
    * @returns {StubObj}
    */
-  makeStub(objDescrJSON) {
+  async makeStub(objDescrJSON) {
     let proto = this._remoteClasses.get(objDescrJSON.className);
-    assert(proto, `Remote class ${ objDescrJSON.className } is unknown here. Make sure to first push the class description.`);
+    if (!proto) {
+      let classDescrJSON = await this.callRemote("class", {
+        idRemote: objDescrJSON.idLocal,
+      });
+      for (let descr of classDescrJSON) {
+        proto = this.registerRemoteClass(descr, proto);
+      }
+    }
     let stub = Object.create(proto);
     stub.id = objDescrJSON.idLocal;
     this.addRemoteObject(objDescrJSON.idLocal, stub);
     for (let propName in objDescrJSON.properties) {
-      stub[propName] = this.mapIncomingObjects(objDescrJSON.properties[propName]);
+      stub[propName] = await this.mapIncomingObjects(objDescrJSON.properties[propName]);
     }
+
     return stub;
   }
 
   makeCallable(id) {
     return async (...args) => {
-      return this.mapIncomingObjects(await this.callRemote("call", {
+      return await this.mapIncomingObjects(await this.callRemote("call", {
         obj: id,
-        args: await this.mapOutgoingObjects(args),
+        args: this.mapOutgoingObjects(args),
       }));
     }
   }
@@ -150,7 +147,7 @@ export default class BaseProtocol {
   makeIterator(symbolName) {
     let self = this;
     return async function*() {
-      let remote = self.mapIncomingObjects(await self.callRemote("iter", {
+      let remote = await self.mapIncomingObjects(await self.callRemote("iter", {
         obj: this.id,
         symbol: symbolName,
       }));
@@ -167,10 +164,10 @@ export default class BaseProtocol {
     let self = this;
     return async function(...args) {
       // this == stub object
-      return self.mapIncomingObjects(await self.callRemote("func", {
+      return await self.mapIncomingObjects(await self.callRemote("func", {
         obj: this.id,
         name: functionName,
-        args: await self.mapOutgoingObjects(args),
+        args: self.mapOutgoingObjects(args),
       }));
     }
   }
@@ -179,7 +176,7 @@ export default class BaseProtocol {
     let self = this;
     return async function() {
       // this == stub object
-      return self.mapIncomingObjects(await self.callRemote("get", {
+      return await self.mapIncomingObjects(await self.callRemote("get", {
         obj: this.id,
         name: propName,
       }));
@@ -193,7 +190,7 @@ export default class BaseProtocol {
       return self.callRemote("set", {
         obj: this.id,
         name: propName,
-        value: await self.mapOutgoingObjects(val),
+        value: self.mapOutgoingObjects(val),
       });
     }
   }
@@ -202,9 +199,9 @@ export default class BaseProtocol {
     let self = this;
     return async function(...args) {
       // this == stub object
-      return self.mapIncomingObjects(await self.callRemote("new", {
+      return await self.mapIncomingObjects(await self.callRemote("new", {
         className: className,
-        args: await self.mapOutgoingObjects(args),
+        args: self.mapOutgoingObjects(args),
       }));
     }
   }
@@ -216,14 +213,14 @@ export default class BaseProtocol {
    * @return {any} same as value, just Object descriptions and Object references
    *   replaced with `StubObject`s.
    */
-  mapIncomingObjects(value) {
+  async mapIncomingObjects(value) {
     if (typeof(value) == "string" ||
         typeof(value) == "number" ||
         typeof(value) == "boolean" ||
         value == null) {
       return value;
     } else if (Array.isArray(value)) {
-      return value.map(el => this.mapIncomingObjects(el));
+      return Promise.all(value.map(el => this.mapIncomingObjects(el)));
     } else if (typeof(value) == "object") {
       let obj = value;
       if (obj.idLocal) {
@@ -236,13 +233,13 @@ export default class BaseProtocol {
           this.addRemoteObject(obj.idLocal, stub);
           return stub;
         }
-        return this.makeStub(obj);
+        return await this.makeStub(obj);
       } else if (obj.idRemote) {
         return this.getLocalObject(obj.idRemote);
       } else if (obj.plainObject) {
         let plainObject = {};
         for (let propName in obj.plainObject) {
-          plainObject[propName] = this.mapIncomingObjects(obj.plainObject[propName]);
+          plainObject[propName] = await this.mapIncomingObjects(obj.plainObject[propName]);
         }
         return plainObject;
       }
@@ -263,7 +260,7 @@ export default class BaseProtocol {
       obj = classCtor();
     } else {
       assert(Array.isArray(args), "Constructor arguments must be an array of values");
-      args = this.mapIncomingObjects(args);
+      args = await this.mapIncomingObjects(args);
       obj = classCtor(...args);
     }
 
@@ -273,7 +270,7 @@ export default class BaseProtocol {
   async callListener(payload) {
     assert(typeof(payload.obj) == "string", "Need object ID");
     let func = this.getLocalObject(payload.obj);
-    let args = this.mapIncomingObjects(payload.args);
+    let args = await this.mapIncomingObjects(payload.args);
 
     // may throw
     let result = func(...args);
@@ -282,7 +279,7 @@ export default class BaseProtocol {
       result = await result;
     }
 
-    return await this.mapOutgoingObjects(result);
+    return this.mapOutgoingObjects(result);
   }
 
   async iterListener(payload) {
@@ -294,7 +291,7 @@ export default class BaseProtocol {
     // may throw
     let result = obj[Symbol[symbol]]();
 
-    return await this.mapOutgoingObjects(result);
+    return this.mapOutgoingObjects(result);
   }
 
   async funcListener(payload) {
@@ -302,7 +299,7 @@ export default class BaseProtocol {
     assert(typeof(name) == "string", "Need function name");
     assert(typeof(payload.obj) == "string", "Need object ID");
     let obj = this.getLocalObject(payload.obj);
-    let args = this.mapIncomingObjects(payload.args);
+    let args = await this.mapIncomingObjects(payload.args);
 
     // may throw
     let result = obj[name](...args);
@@ -311,7 +308,7 @@ export default class BaseProtocol {
       result = await result;
     }
 
-    return await this.mapOutgoingObjects(result);
+    return this.mapOutgoingObjects(result);
   }
 
   async getterListener(payload) {
@@ -323,7 +320,7 @@ export default class BaseProtocol {
     // may throw
     let value = obj[name];
 
-    return await this.mapOutgoingObjects(value);
+    return this.mapOutgoingObjects(value);
   }
 
   async setterListener(payload) {
@@ -331,7 +328,7 @@ export default class BaseProtocol {
     assert(typeof(name) == "string", "Need property setter name");
     assert(typeof(payload.obj) == "string", "Need object ID");
     let obj = this.getLocalObject(payload.obj);
-    let value = this.mapIncomingObjects(payload.value);
+    let value = await this.mapIncomingObjects(payload.value);
 
     // may throw
     obj[payload.name] = value;
@@ -344,14 +341,14 @@ export default class BaseProtocol {
    * @return {any} same as value, just local objects replaced with
    *   Object descriptions and Object references, as defined by PROTOCOL.md
    */
-  async mapOutgoingObjects(value) {
+  mapOutgoingObjects(value) {
     if (typeof(value) == "string" ||
         typeof(value) == "number" ||
         typeof(value) == "boolean" ||
         value == null) {
       return value;
     } else if (Array.isArray(value)) {
-      return Promise.all(value.map(el => this.mapOutgoingObjects(el)));
+      return value.map(el => this.mapOutgoingObjects(el));
     } else if (typeof(value) == "function") {
       let id = this.getOrCreateIDForLocalObject(value);
       return {
@@ -369,23 +366,17 @@ export default class BaseProtocol {
       if (getClassName(obj) == "Object") { // JSON object -- TODO better way to check?
         let plainObject = {};
         for (let propName in obj) {
-          plainObject[propName] = await this.mapOutgoingObjects(obj[propName]);
+          plainObject[propName] = this.mapOutgoingObjects(obj[propName]);
         }
         return {
           plainObject: plainObject,
         };
       }
 
-      return await this.createObjectDescription(obj, this.getOrCreateIDForLocalObject(obj));
+      return this.createObjectDescription(obj, this.getOrCreateIDForLocalObject(obj));
     }
   }
 
-
-  /**
-   * Contains local class descriptions that were already sent to the remote end.
-   * { Set className {string} }
-   */
-  _localClasses = new Set();
 
   /**
    * Return an object instance to the remote party that they did not see yet.
@@ -395,12 +386,9 @@ export default class BaseProtocol {
    * @param obj {Object} local object
    * @returns {JSON} Object description, see PROTOCOL.md
    */
-  async createObjectDescription(obj, id) {
+  createObjectDescription(obj, id) {
     let className = getClassName(obj);
     assert(className, "Could not find class name for local object");
-    if ( !this._localClasses.has(className)) {
-      await this.sendClassDescription(className, obj);
-    }
 
     let props = null;
     for (let propName of Object.getOwnPropertyNames(obj)) {
@@ -415,7 +403,7 @@ export default class BaseProtocol {
       if ( !props) {
         props = {};
       }
-      props[propName] = await this.mapOutgoingObjects(obj[propName]);
+      props[propName] = this.mapOutgoingObjects(obj[propName]);
     }
 
     return {
@@ -425,59 +413,57 @@ export default class BaseProtocol {
     };
   }
 
-  async sendClassDescription(className, instance) {
-    if (this._localClasses.has(className)) {
-      return;
-    }
-    this._localClasses.add(className);
-
-    let proto;
-    if (instance) {
-      proto = Object.getPrototypeOf(instance);
-    }
-
-    let descr = {
-      className: className,
-      iterator: null,
-      functions: [],
-      getters: [],
-      properties: [],
-    };
-
-    if (getClassName(proto) != "Object") {
-      descr.extends = getClassName(proto);
-      await this.sendClassDescription(descr.extends, proto);
-    }
-
-    if (Symbol.asyncInterator in proto) {
-      descr.iterator = "asyncIterator";
-    } else if (Symbol.iterator in proto) {
-      descr.iterator = "iterator";
-    }
-    for (let propName of Object.getOwnPropertyNames(proto)) {
-      if (propName.startsWith("_") || propName == "constructor") {
-        continue;
+  getClassDescription(objDescrJSON) {
+    let classDescrJSON = [];
+    let instance = this.getLocalObject(objDescrJSON.idRemote);
+    while (true) {
+      let className = getClassName(instance);
+      if (className == "Object") {
+        break;
       }
-      let property = Object.getOwnPropertyDescriptor(proto, propName);
-      if (typeof(property.value) == "function") {
-        descr.functions.push({
+
+      let proto = Object.getPrototypeOf(instance);
+      let descr = {
+        className: className,
+        iterator: null,
+        functions: [],
+        getters: [],
+        properties: [],
+      };
+
+      if (Symbol.asyncInterator in proto) {
+        descr.iterator = "asyncIterator";
+      } else if (Symbol.iterator in proto) {
+        descr.iterator = "iterator";
+      }
+      for (let propName of Object.getOwnPropertyNames(proto)) {
+        if (propName.startsWith("_") || propName == "constructor") {
+          continue;
+        }
+        let property = Object.getOwnPropertyDescriptor(proto, propName);
+        if (typeof(property.value) == "function") {
+          descr.functions.push({
+            name: propName,
+          });
+          continue;
+        }
+        if (typeof(property.get) == "function") {
+          descr.getters.push({
+            name: propName,
+            hasSetter: typeof(property.set) == "function",
+          });
+          continue;
+        }
+        descr.properties.push({
           name: propName,
         });
-        continue;
       }
-      if (typeof(property.get) == "function") {
-        descr.getters.push({
-          name: propName,
-          hasSetter: typeof(property.set) == "function",
-        });
-        continue;
-      }
-      descr.properties.push({
-        name: propName,
-      });
+
+      classDescrJSON.unshift(descr);
+      instance = proto;
     }
 
-    await this.callRemote("class", [ descr ]);
+    return classDescrJSON;
   }
 
 
