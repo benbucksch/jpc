@@ -119,7 +119,7 @@ export default class BaseProtocol {
     let proto = this._remoteClasses.get(objDescrJSON.className);
     if (!proto) {
       let classDescrJSON = await this.callRemote("class", {
-        idRemote: objDescrJSON.idLocal,
+        className: objDescrJSON.className,
       });
       for (let descr of classDescrJSON) {
         proto = this.registerRemoteClass(descr, proto);
@@ -381,8 +381,6 @@ export default class BaseProtocol {
   /**
    * Return an object instance to the remote party that they did not see yet.
    *
-   * Sends the class description as needed.
-   *
    * @param obj {Object} local object
    * @returns {JSON} Object description, see PROTOCOL.md
    */
@@ -413,16 +411,10 @@ export default class BaseProtocol {
     };
   }
 
-  getClassDescription(objDescrJSON) {
+  getClassDescription({className}) {
     let classDescrJSON = [];
-    let instance = this.getLocalObject(objDescrJSON.idRemote);
-    while (true) {
-      let className = getClassName(instance);
-      if (className == "Object") {
-        break;
-      }
-
-      let proto = Object.getPrototypeOf(instance);
+    let proto = this._localClasses.get(className);
+    while (proto) { // should always succeed; loop normally exits by break
       let descr = {
         className: className,
         iterator: null,
@@ -460,7 +452,12 @@ export default class BaseProtocol {
       }
 
       classDescrJSON.unshift(descr);
-      instance = proto;
+
+      className = getClassName(proto);
+      if (className == "Object") {
+        break;
+      }
+      proto = Object.getPrototypeOf(proto);
     }
 
     return classDescrJSON;
@@ -482,6 +479,10 @@ export default class BaseProtocol {
    * {WeakMap localObj {obj} -> ID {string} }
    */
   _localObjectsToIDs = new WeakMap();
+  /**
+   * {Map name {string} -> class {Prototype}
+   */
+  _localClasses = new Map();
 
   generateNewObjID() {
     let id;
@@ -525,6 +526,7 @@ export default class BaseProtocol {
       id = this.generateNewObjID();
       this._localObjectsToIDs.set(obj, id);
       this._localObjectRegistry.register(obj, id);
+      this._localClasses.set(getClassName(obj), Object.getPrototypeOf(obj));
     }
     this._localIDsToObjects.set(id, obj);
     return id;
