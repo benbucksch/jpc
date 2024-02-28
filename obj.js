@@ -168,6 +168,7 @@ export default class BaseProtocol {
       Object.defineProperty(obj, propName, {
         configurable: true,
         enumerable: true,
+        writable: false,
         value: await this.mapIncomingObjects(properties[propName]),
       });
     }
