@@ -374,6 +374,13 @@ export default class BaseProtocol {
   }
 
   async observeListener(objDescrJSON) {
+    /* We get the first notification for the object when we subscribe to it;
+      this happens when we first encounter the object on the server.
+      At this point the remote stub does not yet exist on the client,
+      since we have not yet sent the object description to the client.
+      The subscription callback doesn't know that because the object already
+      has a local id by this point, since we need that id in order to establish
+      the subscription without creating a reference loop. */
     let obj = this.getRemoteObject(objDescrJSON.idLocal);
     if (obj) {
       await this.updateObjectProperties(obj, objDescrJSON.properties);
