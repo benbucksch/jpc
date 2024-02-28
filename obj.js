@@ -5,9 +5,35 @@ function getClassName(obj) {
   return (proto && (proto[Symbol.toStringTag] || proto.constructor.name)) || "Object";
 }
 
+function isPrivateProperty(propName) {
+  return propName.startsWith("_") || propName == "constructor";
+}
+
+// This is only set as a function on classes that are known to be observers
+function subscribe(subscriber) {
+  subscriber(this);
+  if (!this._subscribers) {
+    this._subscribers = new Set();
+  }
+  this._subscribers.add(subscriber);
+  return () => this._subscribers.remove(subscriber);
+}
+
 class RemoteClass {
   constructor(className) {
     this.className = className;
+  }
+  _notifySubscribers() {
+    if (this._subscribers) {
+      for (let subscriber of this._subscribers) {
+        try {
+          subscriber(this);
+        } catch (ex) {
+          console.error(ex);
+          this._subscribers.delete(subscriber);
+        }
+      }
+    }
   }
 }
 
@@ -33,6 +59,7 @@ export default class BaseProtocol {
     this.registerIncomingCall("func", this.funcListener.bind(this));
     this.registerIncomingCall("get", this.getterListener.bind(this));
     this.registerIncomingCall("set", this.setterListener.bind(this));
+    this.registerIncomingCall("observe", this.observeListener.bind(this));
     this.registerIncomingCall("del", payload => {
       this.deleteLocalObject(payload.idRemote);
     });
@@ -91,6 +118,9 @@ export default class BaseProtocol {
     if (classDescrJSON.iterator) {
       proto[Symbol.asyncIterator] = this.makeIterator(classDescrJSON.iterator);
     }
+    if (classDescrJSON.observable) {
+      proto.subscribe = subscribe;
+    }
     for (let func of classDescrJSON.functions) {
       proto[func.name] = this.makeFunction(func.name);
     }
@@ -128,11 +158,20 @@ export default class BaseProtocol {
     let stub = Object.create(proto);
     stub.id = objDescrJSON.idLocal;
     this.addRemoteObject(objDescrJSON.idLocal, stub);
-    for (let propName in objDescrJSON.properties) {
-      stub[propName] = await this.mapIncomingObjects(objDescrJSON.properties[propName]);
-    }
+    await this.updateObjectProperties(stub, objDescrJSON.properties);
 
     return stub;
+  }
+
+  async updateObjectProperties(obj, properties) {
+    for (let propName in properties) {
+      Object.defineProperty(obj, propName, {
+        configurable: true,
+        enumerable: true,
+        writable: false,
+        value: await this.mapIncomingObjects(properties[propName]),
+      });
+    }
   }
 
   makeCallable(id) {
@@ -334,6 +373,22 @@ export default class BaseProtocol {
     obj[payload.name] = value;
   }
 
+  async observeListener(objDescrJSON) {
+    /* We get the first notification for the object when we subscribe to it;
+      this happens when we first encounter the object on the server.
+      At this point the remote stub does not yet exist on the client,
+      since we have not yet sent the object description to the client.
+      The subscription callback doesn't know that because the object already
+      has a local id by this point, since we need that id in order to establish
+      the subscription without creating a reference loop. */
+    let obj = this.getRemoteObject(objDescrJSON.idLocal);
+    if (obj) {
+      await this.updateObjectProperties(obj, objDescrJSON.properties);
+      obj._notifySubscribers();
+    } else {
+      await this.makeStub(objDescrJSON); // also fills properties
+    }
+  }
   /**
    * @param value {any} string, number, boolean,
    *   array, JSON obj, or
@@ -379,6 +434,32 @@ export default class BaseProtocol {
 
 
   /**
+   * Notifies the remote end when an observable updates itself.
+   */
+  observe(id) {
+    let props = {};
+    let obj = this.getLocalObject(id);
+    for (let propName in obj) {
+      if (isPrivateProperty(propName)) {
+        continue;
+      }
+
+      let value = obj[propName];
+      if (typeof value == "function") {
+        continue;
+      }
+
+      props[propName] = this.mapOutgoingObjects(value);
+    }
+
+    this.callRemote("observe", {
+      idLocal: id,
+      className: getClassName(obj),
+      properties: props,
+    });
+  }
+
+  /**
    * Return an object instance to the remote party that they did not see yet.
    *
    * @param obj {Object} local object
@@ -389,19 +470,23 @@ export default class BaseProtocol {
     assert(className, "Could not find class name for local object");
 
     let props = null;
-    for (let propName of Object.getOwnPropertyNames(obj)) {
-      if (propName.startsWith("_")) {
-        continue;
+    if (typeof obj.subscribe == "function") {
+      obj.subscribe(this.observe.bind(this, id));
+    } else {
+      for (let propName of Object.getOwnPropertyNames(obj)) {
+        if (isPrivateProperty(propName)) {
+          continue;
+        }
+        let property = Object.getOwnPropertyDescriptor(obj, propName);
+        if (property.get ||
+            typeof(property.value) == "function") {
+          continue;
+        }
+        if ( !props) {
+          props = {};
+        }
+        props[propName] = this.mapOutgoingObjects(obj[propName]);
       }
-      let property = Object.getOwnPropertyDescriptor(obj, propName);
-      if (property.get ||
-          typeof(property.value) == "function") {
-        continue;
-      }
-      if ( !props) {
-        props = {};
-      }
-      props[propName] = this.mapOutgoingObjects(obj[propName]);
     }
 
     return {
@@ -418,6 +503,7 @@ export default class BaseProtocol {
       let descr = {
         className: className,
         iterator: null,
+        observable: false,
         functions: [],
         getters: [],
         properties: [],
@@ -429,14 +515,18 @@ export default class BaseProtocol {
         descr.iterator = "iterator";
       }
       for (let propName of Object.getOwnPropertyNames(proto)) {
-        if (propName.startsWith("_") || propName == "constructor") {
+        if (isPrivateProperty(propName)) {
           continue;
         }
         let property = Object.getOwnPropertyDescriptor(proto, propName);
         if (typeof(property.value) == "function") {
-          descr.functions.push({
-            name: propName,
-          });
+          if (propName == "subscribe") {
+            descr.observable = true;
+          } else {
+            descr.functions.push({
+              name: propName,
+            });
+          }
           continue;
         }
         if (typeof(property.get) == "function") {

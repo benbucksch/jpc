@@ -105,3 +105,40 @@ test('Protocol', async () => {
     console.warn("Unable to run gc tests");
   }
 });
+
+class Interesting {
+  _subscribers = new Set();
+  didStuff = false;
+  subscribe(subscriber) {
+    subscriber(this);
+    this._subscribers.add(subscriber);
+    return () => this._subscribers.remove(subscriber);
+  }
+  doStuff() {
+    this.didStuff = true;
+    for (let subscriber of this._subscribers) {
+      subscriber(this);
+    }
+  }
+}
+
+test('Observable', async () => {
+  let server = new LPCProtocol({ makeObservable: function() { return new Interesting(); } });
+  let client = new LPCProtocol();
+  server.init();
+  client.init();
+  client.connect(server);
+  let start = await client.getRemoteStartObject();
+  expect(start).toBeInstanceOf(Object);
+  expect(start).toHaveProperty("makeObservable");
+  let interesting = await start.makeObservable();
+  expect(interesting.didStuff).toBe(false);
+  let notifications = 0;
+  interesting.subscribe(() => notifications++);
+  expect(notifications).toBe(1);
+  await interesting.doStuff();
+  // Note: This only works because the test is mostly synchronous.
+  // In real life you might have to wait for the notification.
+  expect(interesting.didStuff).toBe(true);
+  expect(notifications).toBe(2);
+});
